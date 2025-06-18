@@ -94,7 +94,7 @@ export default function Home() {
   
   const [isLoading, setIsLoading] = useState(false);
   const [currentStepStatus, setCurrentStepStatus] = useState<'pending' | 'in-progress' | 'completed' | 'error' | 'info'>('pending');
-  const [aiStepSummary, setAiStepSummary] = useState<React.ReactNode>('');
+  const [aiStepSummary, setAiStepSummary] = useState<React.ReactNode>('Select a claim to begin processing.');
 
   const [dashboardMetrics, setDashboardMetrics] = useState(initialDashboardMetrics);
 
@@ -113,7 +113,6 @@ export default function Home() {
     setDecisionSummary(null);
     setMissingInfoEmail(null);
     setCurrentStepStatus('pending');
-    // Only reset processingClaims, keep validated and rejected counts for accumulation until admin reset
     setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); 
   }, []);
   
@@ -204,7 +203,7 @@ export default function Home() {
       setSelectedClaimFile(null);
       setAiStepSummary('Select a claim to begin processing.');
     }
-    toast({ title: "Process Fully Reset", description: "Current claim process and all dashboard counts have been reset." });
+    toast({ title: "Process Fully Reset", description: "Current claim process and all dashboard counts (except total) have been reset." });
   };
 
   const handleProcessAnotherClaim = () => {
@@ -232,10 +231,35 @@ export default function Home() {
       setIsClaimSelectionModalOpen(true);
       return;
     }
-    if (currentStep < 7) { 
-      setCurrentStep(prev => prev + 1);
-      setCurrentStepStatus('pending');
-      setAiStepSummary('Preparing for the next step...');
+
+    if (currentStep < 6) { // Max step before "Process Another Claim" is 6.
+      const nextStepValue = currentStep + 1;
+      let nextStepUserGuidance = 'Preparing for the next step...';
+
+      switch (nextStepValue) {
+        case 1:
+          nextStepUserGuidance = 'The claim data is loaded. Please click "Register Claim Data" to formally log it in the system (Step 1).';
+          break;
+        case 2:
+          nextStepUserGuidance = 'Claim registered. Now, let\'s check policy and member eligibility (Step 2). Click "Check Member Eligibility".';
+          break;
+        case 3:
+          nextStepUserGuidance = 'Eligibility confirmed (or overridden). Proceeding to AI-powered data extraction from documents (Step 3). Click "Extract Document Data".';
+          break;
+        case 4:
+          nextStepUserGuidance = 'Data extracted. Now, the AI will check for inconsistencies against rules (Step 4). Click "Run Consistency Analysis".';
+          break;
+        case 5:
+          nextStepUserGuidance = 'Consistency check complete. Next, we verify medical eligibility based on codes (Step 5). Click "Verify Medical Codes".';
+          break;
+        case 6:
+          nextStepUserGuidance = 'Medical verification done (or overridden). The AI will now generate a final summary and decision (Step 6). Click "Generate Decision & Summary".';
+          break;
+      }
+      
+      setAiStepSummary(nextStepUserGuidance);
+      setCurrentStep(nextStepValue);
+      setCurrentStepStatus('pending'); 
     }
   };
 
@@ -258,19 +282,20 @@ export default function Home() {
     try {
       switch (currentStep) {
         case 1: // Claim Submission (already done by loading)
-          setAiStepSummary("Claim data and documents received and registered.");
+          setAiStepSummary("Claim data and documents received and registered in the system.");
           setCurrentStepStatus('completed');
           break;
 
         case 2: // Eligibility Check
-          setAiStepSummary("Performing initial eligibility checks...");
+          setAiStepSummary("Performing initial eligibility checks based on policy status and member data...");
           const searchAadhaar = claimData.claimantAadhaar.trim();
           const searchPolicyNumber = claimData.policyNumber.trim();
 
           if (!memberData || !Array.isArray(memberData.members) || memberData.members.length === 0) {
             setEligibilityCheckResult({ status: 'Ineligible', message: 'Member data is not available or empty. Cannot perform eligibility check.' });
-            setAiStepSummary('Member data is missing or empty. Please check data files and ensure member_data.json is correctly populated and loaded.');
+            setAiStepSummary(<>Member data is missing or empty. Please check <code>public/data/member_data.json</code> and ensure it is correctly populated and loaded.</>);
             setCurrentStepStatus('error');
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
             break;
           }
           
@@ -281,7 +306,7 @@ export default function Home() {
 
           if (member && member.policyStatus === 'Active') {
             setEligibilityCheckResult({ status: 'Eligible', message: `Policy ${member.policyNumber.trim()} is Active for ${member.name.trim()}. Premium paid on ${member.premiumPaidDate}.` });
-            setAiStepSummary(`Policy holder ${member.name.trim()} is eligible. Policy status: Active.`);
+            setAiStepSummary(<>Policy holder <strong>{member.name.trim()}</strong> is eligible. Policy status: Active. Premium paid on {member.premiumPaidDate}.</>);
             setCurrentStepStatus('completed');
           } else {
             let reason = `Policy/Member not found. Searched Aadhaar: '${searchAadhaar}', Policy: '${searchPolicyNumber}'.`;
@@ -289,13 +314,14 @@ export default function Home() {
               reason = `Policy found for ${member.name.trim()} (Aadhaar: ${member.aadhaarNumber.trim()}, Policy: ${member.policyNumber.trim()}) but status is ${member.policyStatus}.`;
             }
             setEligibilityCheckResult({ status: 'Ineligible', message: reason });
-            setAiStepSummary(`Claimant is ineligible. ${reason}`);
+            setAiStepSummary(<>Claimant is ineligible. {reason} You can choose to override this or select a different claim.</>);
             setCurrentStepStatus('error'); 
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
           }
           break;
 
         case 3: // OCR + GenAI
-          setAiStepSummary("Extracting data from documents using AI (simulated OCR)...");
+          setAiStepSummary("Simulating AI-powered data extraction from claim documents...");
           const currentClaimDataForOcr = JSON.parse(JSON.stringify(claimData));
           const ocrResult = await extractAndFillClaimData({
             claimDocumentDataUri: PLACEHOLDER_IMAGE_DATA_URI,
@@ -304,34 +330,37 @@ export default function Home() {
           setOcrOutput(ocrResult);
           setClaimData(prev => ({ ...prev!, ...ocrResult }));
           const newFieldsCount = Object.keys(ocrResult).filter(key => !(key in currentClaimDataForOcr) || currentClaimDataForOcr[key] !== ocrResult[key]).length;
-          setAiStepSummary(`AI has extracted and potentially updated data. ${newFieldsCount} fields affected. Review extracted data below.`);
+          setAiStepSummary(`AI has simulated document data extraction and updated the claim. ${newFieldsCount} fields were added or modified. Review extracted data below.`);
           setCurrentStepStatus('completed');
           break;
 
         case 4: // Consistency Check
-          setAiStepSummary("Running AI consistency checks on claim data against rules...");
+          setAiStepSummary("Running AI consistency checks: comparing claim data against predefined rules and known data sources...");
           const consistencyResult = await highlightClaimInconsistencies({
             claimData: JSON.stringify(claimData),
             rules: JSON.stringify(medicalCodes.rules.concat(medicalCodes.eligibleCodes.map(c => `Eligible code: ${c}`)).concat(medicalCodes.ineligibleCodes.map(c => `Ineligible code: ${c}`))),
           });
           setInconsistencies(consistencyResult);
           if (consistencyResult.inconsistencies.length > 0) {
-            setAiStepSummary(<>Found {consistencyResult.inconsistencies.length} potential inconsistencies. Summary: {consistencyResult.summary} Review details below.</>);
-            if (consistencyResult.inconsistencies.some(inc => inc.toLowerCase().includes("critical") || inc.toLowerCase().includes("missing document"))) {
+            setAiStepSummary(<>AI found {consistencyResult.inconsistencies.length} potential inconsistencies. Summary: {consistencyResult.summary}. If critical issues like missing documents are found, the process will redirect to request more information.</>);
+            setCurrentStepStatus('completed'); // Mark as completed for now, then check for redirect.
+            if (consistencyResult.inconsistencies.some(inc => inc.toLowerCase().includes("critical") || inc.toLowerCase().includes("missing document") || inc.toLowerCase().includes("incomplete information"))) {
               setClaimData(prev => ({...prev!, missingInformation: consistencyResult.inconsistencies}));
+              setAiStepSummary(<>Critical inconsistencies found: {consistencyResult.summary}. Redirecting to request missing information.</>);
               setCurrentStep(7); 
               setIsLoading(false); 
               setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
+              setCurrentStepStatus('info'); // Status for step 7
               return; 
             }
           } else {
-            setAiStepSummary("AI consistency check passed. No major inconsistencies found.");
+            setAiStepSummary("AI consistency check passed. No major inconsistencies found in the claim data.");
+            setCurrentStepStatus('completed');
           }
-          setCurrentStepStatus('completed');
           break;
 
         case 5: // Eligibility Verification (Medical Codes)
-          setAiStepSummary("Verifying medical eligibility based on codes...");
+          setAiStepSummary("Verifying medical eligibility based on diagnosis codes and policy rules...");
           let isMedicallyEligible = false;
           let medicalVerificationMessage = "No eligible medical codes found or codes conflict with policy rules.";
           
@@ -347,19 +376,22 @@ export default function Home() {
             }
           }
           setMedicalVerificationResult({ status: isMedicallyEligible ? 'Eligible' : 'Ineligible', message: medicalVerificationMessage, isEligible: isMedicallyEligible });
-          setAiStepSummary(medicalVerificationMessage);
+          setAiStepSummary(<>Medical verification result: <strong>{isMedicallyEligible ? 'Eligible' : 'Ineligible'}</strong>. {medicalVerificationMessage} You can choose to override this or select a different claim if ineligible.</>);
           setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error');
+          if (!isMedicallyEligible) {
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
+          }
           break;
 
         case 6: // Summary & Decision
           if (!medicalVerificationResult || !eligibilityCheckResult) { 
-             setAiStepSummary("Eligibility and Medical verification must be completed first.");
+             setAiStepSummary("Eligibility and Medical verification must be completed first. Please go back if necessary.");
              setCurrentStepStatus('error');
              setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
              break;
           }
           
-          setAiStepSummary("Generating final decision summary with AI...");
+          setAiStepSummary("Generating final claim decision summary with AI...");
           
           const userOverrodeEligibility = eligibilityCheckResult.status === 'Ineligible' && (overrideModalConfig?.title.includes("Eligibility"));
           const userOverrodeMedical = medicalVerificationResult.isEligible === false && (overrideModalConfig?.title.includes("Medical"));
@@ -368,17 +400,17 @@ export default function Home() {
                               (medicalVerificationResult.isEligible || userOverrodeMedical);
 
 
-          const settlementAmount = isOverallEligible ? claimData.claimedAmount * 0.9 : 0; 
+          const settlementAmount = isOverallEligible ? Math.round(claimData.claimedAmount * 0.9) : 0; 
           setClaimData(prev => ({ ...prev!, settlementAmount }));
 
           const summaryResult = await generateClaimSummary({
             claimAmount: claimData.claimedAmount,
             settlementAmount: settlementAmount,
             isEligible: isOverallEligible,
-            reason: `Eligibility: ${eligibilityCheckResult.message}. Medical Verification: ${medicalVerificationResult.message}. Overrides applied if applicable.`,
+            reason: `Policy Eligibility: ${eligibilityCheckResult.message}. Medical Verification: ${medicalVerificationResult.message}. Overrides applied: Policy Override - ${userOverrodeEligibility ? 'Yes' : 'No'}, Medical Override - ${userOverrodeMedical ? 'Yes' : 'No'}.`,
           });
           setDecisionSummary(summaryResult);
-          setAiStepSummary(<>Decision: <strong>{summaryResult.decision}</strong>. {summaryResult.summary}</>);
+          setAiStepSummary(<>AI Decision: <strong>{summaryResult.decision}</strong>. {summaryResult.summary}</>);
           setCurrentStepStatus('completed');
           if (summaryResult.decision === 'Approved') {
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: prev.validatedClaims + 1 }));
@@ -389,8 +421,8 @@ export default function Home() {
           break;
 
         case 7: // Missing Info Path
-          setAiStepSummary("AI is generating an email for missing information...");
-           const missingInfoForEmail = claimData.missingInformation?.length > 0 ? claimData.missingInformation : ["Details about diagnosis", "Copy of ID proof"];
+          setAiStepSummary("AI is generating a draft email to request the missing information from the claimant...");
+           const missingInfoForEmail = claimData.missingInformation?.length > 0 ? claimData.missingInformation : ["Details about diagnosis", "Copy of ID proof"]; // Fallback if somehow empty
 
           const emailResult = await generateMissingInfoEmail({
             claimId: claimData.claimId,
@@ -398,13 +430,13 @@ export default function Home() {
             missingInformation: missingInfoForEmail,
           });
           setMissingInfoEmail(emailResult);
-          setAiStepSummary("AI generated a draft email to request missing information. See details below.");
+          setAiStepSummary("AI generated a draft email to request missing information. Review details below. Click button to simulate info provided and retry consistency check.");
           setCurrentStepStatus('info');
           setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); 
           break;
         
         default:
-          setAiStepSummary("Unknown step or process not started.");
+          setAiStepSummary("Unknown step or process not started. Please select a claim.");
           setCurrentStepStatus('pending');
           setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
       }
@@ -415,9 +447,11 @@ export default function Home() {
       setAiStepSummary(`An error occurred: ${error.message}. Check console for details.`);
       setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); 
     } finally {
+      // Ensure isLoading is false unless a redirect to step 7 happened (which sets it to false itself)
       if (!(currentStep === 4 && claimData?.missingInformation?.length && claimData.missingInformation.length > 0 && currentStepStatus !== 'completed')) {
          setIsLoading(false);
       }
+      // Clear override config if step completed successfully or if error wasn't an overridable one.
       if (currentStepStatus === 'completed' || (currentStepStatus === 'error' && !(currentStep === 2 || currentStep === 5))) {
         setOverrideModalConfig(null);
       }
@@ -427,11 +461,12 @@ export default function Home() {
   const renderStepContent = () => {
     if (isLoading && !claimData && currentStep === 0 && availableClaims.length === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Application Data...</p></div>;
     
-    const commonActionButton = (text: string) => ({
+    const commonActionButton = (text: string, processingText?: string) => ({
       text: text,
       onClick: handleProcessStep,
-      disabled: isLoading || currentStepStatus === 'completed' || (currentStepStatus === 'error' && currentStep !== 7 && currentStep !== 2 && currentStep !== 5),
+      disabled: isLoading || currentStepStatus === 'completed' || (currentStepStatus === 'error' && currentStep !== 7 && currentStep !== 2 && currentStep !== 5) || !claimData,
       loading: isLoading && currentStepStatus === 'in-progress',
+      processingText: processingText || text,
     });
     
     const nextStepButton = (text: string) => ({
@@ -477,7 +512,7 @@ export default function Home() {
           <ClaimStepCard
             stepNumber={1} title="Claim Submission" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.blue}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Eligibility Check") : commonActionButton("Register Claim")}
+            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Eligibility Check") : commonActionButton("Register Claim Data")}
           >
             <ClaimDetailsView data={claimData} title="Initial Claim Data" />
           </ClaimStepCard>
@@ -490,8 +525,8 @@ export default function Home() {
             actionButton={
               currentStepStatus === 'completed' ? nextStepButton("Proceed to Data Extraction") :
               (eligibilityCheckResult?.status === 'Ineligible' && currentStepStatus === 'error' ?
-                null : 
-                commonActionButton("Check Eligibility"))
+                null : // Buttons are in CardFooter for this case
+                commonActionButton("Check Member Eligibility"))
             }
           >
             {eligibilityCheckResult && (
@@ -523,9 +558,13 @@ export default function Home() {
                 <Button
                   variant="destructive"
                   onClick={() => handleShowOverrideModal(
-                    "Confirm Override: Eligibility",
-                    `${eligibilityCheckResult.message}. Do you want to override this and continue processing?`,
-                    () => { proceedToNextStep(); }
+                    "Override Eligibility Check",
+                    `The claim was found to be ineligible: "${eligibilityCheckResult.message}". Do you want to override this and continue processing?`,
+                    () => { 
+                      setEligibilityCheckResult(prev => ({...prev!, status: 'Eligible (Overridden)', message: `${prev?.message} - Overridden by user.`}));
+                      setAiStepSummary('Eligibility overridden by user. Proceeding to next step.');
+                      proceedToNextStep(); 
+                    }
                   )}
                   disabled={isLoading}
                   className="w-full sm:w-auto"
@@ -539,20 +578,20 @@ export default function Home() {
       case 3: // OCR + GenAI
         return (
           <ClaimStepCard
-            stepNumber={3} title="Document Data Extraction (OCR + GenAI)" status={currentStepStatus}
+            stepNumber={3} title="Document Data Extraction (AI)" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.green}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Consistency Check") : commonActionButton("Extract Document Data")}
+            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Consistency Analysis") : commonActionButton("Extract Document Data")}
           >
-            {ocrOutput && <ClaimDetailsView data={ocrOutput} title="AI Extracted/Filled Data" />}
-            <p className="text-xs text-muted-foreground mt-2">Simulated document: placeholder 1x1 pixel image.</p>
+            {ocrOutput && <ClaimDetailsView data={ocrOutput} title="AI Extracted/Augmented Data" />}
+            <p className="text-xs text-muted-foreground mt-2">Simulated document: placeholder 1x1 pixel image used as trigger for AI data augmentation.</p>
           </ClaimStepCard>
         );
       case 4: // Consistency Check
         return (
           <ClaimStepCard
-            stepNumber={4} title="Claim Consistency Check (RAG + GenAI)" status={currentStepStatus}
+            stepNumber={4} title="Claim Consistency Analysis (AI)" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.red}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Medical Verification") : commonActionButton("Run Consistency Check")}
+            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Medical Verification") : commonActionButton("Run Consistency Analysis")}
           >
             {inconsistencies && (
               <>
@@ -568,9 +607,9 @@ export default function Home() {
             stepNumber={5} title="Medical Eligibility Verification" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.blue}
             actionButton={
-              currentStepStatus === 'completed' ? nextStepButton("Proceed to Final Summary") :
+              currentStepStatus === 'completed' ? nextStepButton("Proceed to Final Summary & Decision") :
               (medicalVerificationResult?.isEligible === false && currentStepStatus === 'error' ?
-                null : 
+                null : // Buttons are in CardFooter for this case
                 commonActionButton("Verify Medical Codes"))
             }
           >
@@ -579,7 +618,7 @@ export default function Home() {
                 Status: {medicalVerificationResult.isEligible ? 'Eligible' : 'Ineligible'} - {medicalVerificationResult.message}
               </p>
             )}
-            <ClaimDetailsView data={{ medicalCodesUsed: claimData?.medicalCodes, rulesSnapshot: medicalCodes?.eligibleCodes.slice(0,2).concat(medicalCodes.ineligibleCodes.slice(0,1)) }} title="Data Used for Verification" />
+            <ClaimDetailsView data={{ medicalCodesUsed: claimData?.medicalCodes, eligibleSample: medicalCodes?.eligibleCodes.slice(0,2), ineligibleSample: medicalCodes?.ineligibleCodes.slice(0,1) }} title="Data Used for Verification (Sample)" />
             
             {medicalVerificationResult?.isEligible === false && currentStepStatus === 'error' && (
                <CardFooter className="pt-4 flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-2">
@@ -603,9 +642,13 @@ export default function Home() {
                 <Button
                   variant="destructive"
                   onClick={() => handleShowOverrideModal(
-                    "Confirm Override: Medical Verification",
-                    `${medicalVerificationResult.message}. Do you want to override this and continue processing?`,
-                    () => { proceedToNextStep(); }
+                    "Override Medical Verification",
+                    `Medical verification indicated the claim is ineligible: "${medicalVerificationResult.message}". Do you want to override this and continue processing?`,
+                    () => { 
+                      setMedicalVerificationResult(prev => ({...prev!, isEligible: true, status: 'Eligible (Overridden)', message: `${prev?.message} - Overridden by user.`}));
+                      setAiStepSummary('Medical verification overridden by user. Proceeding to next step.');
+                      proceedToNextStep(); 
+                    }
                   )}
                   disabled={isLoading}
                   className="w-full sm:w-auto"
@@ -619,7 +662,7 @@ export default function Home() {
       case 6: // Summary & Decision
         return (
           <ClaimStepCard
-            stepNumber={6} title="Final Summary & Decision" status={currentStepStatus}
+            stepNumber={6} title="Final Summary & Decision (AI)" status={currentStepStatus}
             aiSummary={aiStepSummary}
             borderColorClass={decisionSummary?.decision === 'Approved' ? GOOGLE_COLORS.green : (decisionSummary?.decision === 'Rejected' ? GOOGLE_COLORS.red : GOOGLE_COLORS.muted)}
             actionButton={
@@ -629,7 +672,7 @@ export default function Home() {
                 onClick: handleProcessAnotherClaim,
                 disabled: isLoading 
               } : 
-              commonActionButton("Generate Decision")
+              commonActionButton("Generate Decision & Summary")
             }
           >
             {decisionSummary && claimData && (
@@ -642,8 +685,10 @@ export default function Home() {
                     <div><strong>Claimed Amount:</strong> {claimData.claimedAmount.toLocaleString()}</div>
                     <div><strong>Settlement Amount:</strong> {(claimData.settlementAmount ?? 0).toLocaleString()}</div>
                 </div>
+                 <ClaimDetailsView data={{reasoning: decisionSummary.reasoningForDecision || "Provided in summary"}} title="AI Reasoning Snippet"/>
               </>
             )}
+             {!decisionSummary && currentStepStatus === 'in-progress' && <p>AI is working on the decision...</p>}
           </ClaimStepCard>
         );
        case 7: // Missing Info Path
@@ -652,30 +697,29 @@ export default function Home() {
             stepNumber={7} title="Missing Information Required" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.yellow}
              actionButton={{
-                text: "Simulate Info Provided & Retry Consistency Check",
+                text: "Simulate Info Provided & Retry Consistency",
                 onClick: () => {
                     if (!claimData) return;
-                    setClaimData(prev => ({ ...prev!, missingInformation: [], diagnosis: prev?.diagnosis || "Updated Diagnosis after missing info provided" }));
-                    setCurrentStep(4); 
+                    setClaimData(prev => ({ ...prev!, missingInformation: [], diagnosis: prev?.diagnosis || "Updated Diagnosis after missing info provided" })); // Simulate info fixed
+                    setCurrentStep(4); // Go back to consistency check
                     setCurrentStepStatus('pending');
-                    setAiStepSummary('Simulated information provided. Retrying consistency check...');
+                    setAiStepSummary('Simulated information provided. Retrying consistency check (Step 4)...');
                     setIsLoading(false); 
                     setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
                 },
-                disabled: isLoading || !claimData,
-                loading: isLoading && currentStepStatus === 'in-progress',
+                disabled: isLoading || !claimData || currentStepStatus !== 'info',
             }}
           >
             {missingInfoEmail && (
               <div className="space-y-2">
-                <h5 className="font-semibold">AI Generated Email Draft:</h5>
+                <h5 className="font-semibold">AI Generated Email Draft to Claimant:</h5>
                 <p><strong>Subject:</strong> {missingInfoEmail.emailSubject}</p>
-                <ScrollArea className="h-40 rounded-md border p-2 bg-background">
+                <ScrollArea className="h-40 rounded-md border p-2 bg-secondary/20">
                   <pre className="text-xs whitespace-pre-wrap">{missingInfoEmail.emailBody}</pre>
                 </ScrollArea>
               </div>
             )}
-             <ClaimDetailsView data={{missingItems: claimData?.missingInformation}} title="Items Marked as Missing" />
+             <ClaimDetailsView data={{missingItems: claimData?.missingInformation}} title="Items Marked as Missing/Inconsistent" />
           </ClaimStepCard>
         );
       default:
@@ -733,19 +777,19 @@ export default function Home() {
                 {overrideModalConfig?.message}
               </DialogDescription>
             </DialogHeader>
-            <DialogFooter className="sm:justify-end space-x-2">
+            <DialogFooter className="sm:justify-end space-x-2 pt-4">
               <Button variant="outline" onClick={() => {setIsOverrideModalOpen(false); setOverrideModalConfig(null);}}>
                 Cancel
               </Button>
               <Button
+                variant="destructive"
                 onClick={() => {
                   if (overrideModalConfig) {
                     overrideModalConfig.onConfirm();
                   }
                   setIsOverrideModalOpen(false);
-                  // Deliberately not clearing overrideModalConfig here, 
-                  // as it's used in handleProcessStep for step 6 decision logic
-                  // It will be cleared in handleProcessStep's finally block or when a new override is set.
+                  // overrideModalConfig is used in handleProcessStep (step 6 decision)
+                  // It is cleared there after use, or when a new override is set, or on cancel here.
                 }}
               >
                 Yes, Continue Processing
