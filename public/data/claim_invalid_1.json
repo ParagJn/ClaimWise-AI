@@ -1,0 +1,16 @@
+{
+  "claimId": "CLI0000001",
+  "policyNumber": "POL901234",
+  "claimantName": "Rajesh Kumar",
+  "claimantAadhaar": "345678901234",
+  "dateOfService": "2024-05-15",
+  "hospitalName": "Community Health Center",
+  "diagnosis": "General Weakness",
+  "claimedAmount": 5000,
+  "documents": [
+    { "type": "OPD Bill", "fileName": "opd_rajesh.pdf" }
+  ],
+  "medicalCodes": ["R53"],
+  "settlementAmount": null,
+  "missingInformation": []
+}

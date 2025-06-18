@@ -1,0 +1,17 @@
+{
+  "claimId": "CLV0000001",
+  "policyNumber": "POL345678",
+  "claimantName": "Priya Singh",
+  "claimantAadhaar": "234567890123",
+  "dateOfService": "2024-05-10",
+  "hospitalName": "Apollo Hospital",
+  "diagnosis": "Asthma Exacerbation",
+  "claimedAmount": 22000,
+  "documents": [
+    { "type": "Doctor Consultation", "fileName": "consult_priya.pdf" },
+    { "type": "Pharmacy Bills", "fileName": "pharma_priya.pdf" }
+  ],
+  "medicalCodes": ["J45"],
+  "settlementAmount": null,
+  "missingInformation": []
+}

@@ -1,0 +1,14 @@
+{
+  "claimId": "CLI0000002",
+  "policyNumber": "POL345678",
+  "claimantName": "Priya Singh",
+  "claimantAadhaar": "234567890123",
+  "dateOfService": "2024-08-01",
+  "hospitalName": "Wellness Clinic",
+  "diagnosis": "Routine Checkup",
+  "claimedAmount": 2000,
+  "documents": [],
+  "medicalCodes": ["Z76.5"],
+  "settlementAmount": null,
+  "missingInformation": ["Hospital Bill", "Doctor's Prescription"]
+}

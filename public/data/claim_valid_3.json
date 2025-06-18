@@ -1,0 +1,17 @@
+{
+  "claimId": "CLV0000003",
+  "policyNumber": "POL789012",
+  "claimantName": "Amit Sharma",
+  "claimantAadhaar": "123456789012",
+  "dateOfService": "2024-07-20",
+  "hospitalName": "Max Healthcare",
+  "diagnosis": "Gastric Ulcer Treatment",
+  "claimedAmount": 35000,
+  "documents": [
+    { "type": "Discharge Summary", "fileName": "discharge_amit_ulcer.pdf" },
+    { "type": "Endoscopy Report", "fileName": "endoscopy_amit.pdf" }
+  ],
+  "medicalCodes": ["K25"],
+  "settlementAmount": null,
+  "missingInformation": []
+}

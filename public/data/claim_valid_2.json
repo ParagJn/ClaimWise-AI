@@ -1,0 +1,16 @@
+{
+  "claimId": "CLV0000002",
+  "policyNumber": "POL567890",
+  "claimantName": "Sunita Devi",
+  "claimantAadhaar": "456789012345",
+  "dateOfService": "2024-06-01",
+  "hospitalName": "Fortis Clinic",
+  "diagnosis": "Essential Hypertension Management",
+  "claimedAmount": 8500,
+  "documents": [
+    { "type": "Medical Certificate", "fileName": "med_cert_sunita.pdf" }
+  ],
+  "medicalCodes": ["I10"],
+  "settlementAmount": null,
+  "missingInformation": []
+}
