@@ -1,0 +1,9 @@
+
+[
+  { "name": "Default Claim (Original)", "path": "/data/claim.json" },
+  { "name": "Valid Claim 1", "path": "/data/claim_valid_1.json" },
+  { "name": "Valid Claim 2", "path": "/data/claim_valid_2.json" },
+  { "name": "Valid Claim 3", "path": "/data/claim_valid_3.json" },
+  { "name": "Invalid Claim 1", "path": "/data/claim_invalid_1.json" },
+  { "name": "Invalid Claim 2", "path": "/data/claim_invalid_2.json" }
+]

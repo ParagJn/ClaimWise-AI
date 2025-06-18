@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -9,8 +10,9 @@ import ClaimDetailsView from '@/components/ClaimDetailsView';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from '@/components/ui/dialog';
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, CheckCircle, AlertTriangle, Info } from 'lucide-react';
+import { Loader2, CheckCircle, AlertTriangle, Info, List } from 'lucide-react';
 
 import { extractAndFillClaimData, type ExtractAndFillClaimDataOutput } from '@/ai/flows/extract-and-fill-claim-data';
 import { highlightClaimInconsistencies, type HighlightClaimInconsistenciesOutput } from '@/ai/flows/highlight-claim-inconsistencies';
@@ -59,6 +61,11 @@ type MedicalCodesData = {
   rules: string[];
 };
 
+type AvailableClaimFile = {
+  name: string;
+  path: string;
+};
+
 const initialDashboardMetrics = {
   totalClaims: 0,
   processingClaims: 0,
@@ -70,9 +77,13 @@ export default function Home() {
   const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0); // 0: Idle, 1-7: Steps
   const [claimData, setClaimData] = useState<ClaimData | null>(null);
-  const [initialClaimData, setInitialClaimData] = useState<ClaimData | null>(null);
+  const [initialClaimData, setInitialClaimData] = useState<ClaimData | null>(null); // Stores the originally loaded claim for reset purposes
   const [memberData, setMemberData] = useState<MemberData | null>(null);
   const [medicalCodes, setMedicalCodes] = useState<MedicalCodesData | null>(null);
+  const [availableClaims, setAvailableClaims] = useState<AvailableClaimFile[]>([]);
+  const [isClaimSelectionModalOpen, setIsClaimSelectionModalOpen] = useState(false);
+  const [selectedClaimFile, setSelectedClaimFile] = useState<AvailableClaimFile | null>(null);
+
 
   const [ocrOutput, setOcrOutput] = useState<ExtractAndFillClaimDataOutput | null>(null);
   const [inconsistencies, setInconsistencies] = useState<HighlightClaimInconsistenciesOutput | null>(null);
@@ -87,39 +98,36 @@ export default function Home() {
 
   const [dashboardMetrics, setDashboardMetrics] = useState(initialDashboardMetrics);
 
-  const loadInitialData = useCallback(async () => {
+  const fetchCoreData = useCallback(async () => {
+    // Fetches member_data and medical_codes once
+    if (memberData && medicalCodes) return; // Already loaded
+    
     setIsLoading(true);
     try {
-      const [claimRes, memberRes, medicalRes] = await Promise.all([
-        fetch('/data/claim.json'),
+      const [memberRes, medicalRes, availableClaimsRes] = await Promise.all([
         fetch('/data/member_data.json'),
         fetch('/data/medical_codes.json'),
+        fetch('/data/available_claims.json'),
       ]);
-      if (!claimRes.ok || !memberRes.ok || !medicalRes.ok) throw new Error("Failed to load initial data.");
+      if (!memberRes.ok || !medicalRes.ok || !availableClaimsRes.ok) throw new Error("Failed to load core application data.");
       
-      const claimJson: ClaimData = await claimRes.json();
-      setClaimData(claimJson);
-      setInitialClaimData(claimJson); // Save a copy for reset
       setMemberData(await memberRes.json());
       setMedicalCodes(await medicalRes.json());
-      setDashboardMetrics(prev => ({ ...prev, totalClaims: 1 }));
-      setCurrentStep(0); // Ready to start
-      resetFlowStates();
+      const claimsList: AvailableClaimFile[] = await availableClaimsRes.json();
+      setAvailableClaims(claimsList);
+      setDashboardMetrics(prev => ({ ...prev, totalClaims: claimsList.length }));
+
     } catch (error) {
-      console.error("Error loading data:", error);
-      toast({ title: "Error", description: "Failed to load initial data. Please try reloading.", variant: "destructive" });
+      console.error("Error loading core data:", error);
+      toast({ title: "Error", description: "Failed to load core application data. Please try reloading.", variant: "destructive" });
       setCurrentStepStatus('error');
       setAiStepSummary('Failed to load critical data. Please check console and reload.');
     } finally {
       setIsLoading(false);
     }
-  }, [toast]);
+  }, [toast, memberData, medicalCodes]);
 
-  useEffect(() => {
-    loadInitialData();
-  }, [loadInitialData]);
-
-  const resetFlowStates = () => {
+  const resetFlowStates = useCallback(() => {
     setOcrOutput(null);
     setInconsistencies(null);
     setEligibilityCheckResult(null);
@@ -127,21 +135,77 @@ export default function Home() {
     setDecisionSummary(null);
     setMissingInfoEmail(null);
     setCurrentStepStatus('pending');
-    setAiStepSummary('');
-    if (initialClaimData) setClaimData(initialClaimData); // Reset claimData to initial
-    setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims }));
-  };
+    // Don't reset aiStepSummary here as it might be set by loadClaimSpecificData
+    // If claimData is being reset to a *new* initial, that happens in loadClaimSpecificData
+    setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims })); // Keep totalClaims
+  }, []);
+
+
+  const loadClaimSpecificData = useCallback(async (claimFilePath: string) => {
+    setIsLoading(true);
+    resetFlowStates(); // Reset previous claim's flow state
+    setCurrentStep(0); // Go back to selection/start screen
+    try {
+      const claimRes = await fetch(claimFilePath);
+      if (!claimRes.ok) throw new Error(`Failed to load claim data from ${claimFilePath}.`);
+      
+      const claimJson: ClaimData = await claimRes.json();
+      setClaimData(claimJson);
+      setInitialClaimData(claimJson); // Save a copy for reset to this specific claim
+      
+      // Update dashboard processing count if a claim is loaded
+      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 0, rejectedClaims: 0 }));
+      setCurrentStep(0); // Ready to start processing this new claim
+      setAiStepSummary(`Claim "${availableClaims.find(c => c.path === claimFilePath)?.name || 'Selected Claim'}" loaded. Click "Start Processing This Claim" to begin.`);
+
+    } catch (error) {
+      console.error("Error loading claim-specific data:", error);
+      toast({ title: "Error", description: `Failed to load selected claim data. ${error instanceof Error ? error.message : ''}`, variant: "destructive" });
+      setCurrentStepStatus('error');
+      setAiStepSummary('Failed to load the selected claim. Please try another or check console.');
+      setClaimData(null);
+      setInitialClaimData(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast, resetFlowStates, availableClaims]);
+
+  useEffect(() => {
+    fetchCoreData();
+  }, [fetchCoreData]);
+
 
   const handleReset = () => {
     setCurrentStep(0);
     resetFlowStates();
-    if (initialClaimData) setClaimData(initialClaimData);
-    setDashboardMetrics(prev => ({...initialDashboardMetrics, totalClaims: 1}));
-    toast({ title: "Process Reset", description: "Claim process has been reset to the beginning." });
+    if (initialClaimData) { // If a specific claim was loaded, reset to its initial state
+      setClaimData(initialClaimData); 
+    } else {
+      setClaimData(null); // Or clear if no specific claim was loaded initially
+    }
+    // Reset dashboard specific to current claim (totalClaims remains)
+    setDashboardMetrics(prev => ({...initialDashboardMetrics, totalClaims: prev.totalClaims, processingClaims: 0, validatedClaims: 0, rejectedClaims: 0}));
+    toast({ title: "Process Reset", description: "Claim process has been reset for the current claim." });
+     if (selectedClaimFile) {
+        setAiStepSummary(`Claim "${selectedClaimFile.name}" reloaded. Click "Start Processing This Claim" to begin.`);
+    } else {
+        setAiStepSummary('Select a claim to begin processing.');
+    }
+  };
+
+  const handleSelectClaimFile = (file: AvailableClaimFile) => {
+    setSelectedClaimFile(file);
+    loadClaimSpecificData(file.path);
+    setIsClaimSelectionModalOpen(false);
   };
 
   const proceedToNextStep = () => {
-    if (currentStep < 7) { // Max 7 steps including missing info
+    if (!claimData) {
+      toast({ title: "No Claim Loaded", description: "Please select a claim to process first.", variant: "destructive"});
+      setIsClaimSelectionModalOpen(true);
+      return;
+    }
+    if (currentStep < 7) { 
       setCurrentStep(prev => prev + 1);
       setCurrentStepStatus('pending');
       setAiStepSummary('Preparing for the next step...');
@@ -150,7 +214,8 @@ export default function Home() {
 
   const handleProcessStep = useCallback(async () => {
     if (!claimData || !memberData || !medicalCodes) {
-      toast({ title: "Data Missing", description: "Core data not loaded. Cannot process.", variant: "destructive" });
+      toast({ title: "Data Missing", description: "Core or claim data not loaded. Cannot process.", variant: "destructive" });
+      if (!claimData) setIsClaimSelectionModalOpen(true);
       return;
     }
     
@@ -175,21 +240,25 @@ export default function Home() {
           } else {
             setEligibilityCheckResult({ status: 'Ineligible', message: `Policy/Member not found or policy is Inactive.` });
             setAiStepSummary('Claimant is ineligible based on policy status or member data.');
-            setCurrentStepStatus('error'); // Or 'info' if it can proceed to missing info
+            setCurrentStepStatus('error'); 
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
-            // Potentially end flow or go to missing info
           }
           break;
 
         case 3: // OCR + GenAI
           setAiStepSummary("Extracting data from documents using AI (simulated OCR)...");
+          // Use a deep copy of claimData for the AI flow to avoid direct mutation issues if any
+          const currentClaimDataForOcr = JSON.parse(JSON.stringify(claimData));
           const ocrResult = await extractAndFillClaimData({
             claimDocumentDataUri: PLACEHOLDER_IMAGE_DATA_URI,
-            currentClaimData: claimData,
+            currentClaimData: currentClaimDataForOcr,
           });
           setOcrOutput(ocrResult);
-          setClaimData(prev => ({ ...prev!, ...ocrResult })); // Update claimData with OCR results
-          setAiStepSummary(`AI has extracted and auto-filled data. ${Object.keys(ocrResult).length - Object.keys(claimData).length} new fields populated. Review extracted data below.`);
+          // Merge OCR results carefully: ocrResult might be partial or a full object
+          // Prefer values from ocrResult if they exist.
+          setClaimData(prev => ({ ...prev!, ...ocrResult }));
+          const newFieldsCount = Object.keys(ocrResult).filter(key => !(key in currentClaimDataForOcr) || currentClaimDataForOcr[key] !== ocrResult[key]).length;
+          setAiStepSummary(`AI has extracted and potentially updated data. ${newFieldsCount} fields affected. Review extracted data below.`);
           setCurrentStepStatus('completed');
           break;
 
@@ -202,11 +271,11 @@ export default function Home() {
           setInconsistencies(consistencyResult);
           if (consistencyResult.inconsistencies.length > 0) {
             setAiStepSummary(<>Found {consistencyResult.inconsistencies.length} potential inconsistencies. Summary: {consistencyResult.summary} Review details below.</>);
-            // Check if this warrants going to missing info path
             if (consistencyResult.inconsistencies.some(inc => inc.toLowerCase().includes("critical") || inc.toLowerCase().includes("missing document"))) {
               setClaimData(prev => ({...prev!, missingInformation: consistencyResult.inconsistencies}));
-              setCurrentStep(7); // Jump to Missing Info step
-              return; // Skip setIsLoading(false) for this path
+              setCurrentStep(7); 
+              setIsLoading(false); // Set loading to false as we are jumping steps
+              return; 
             }
           } else {
             setAiStepSummary("AI consistency check passed. No major inconsistencies found.");
@@ -216,53 +285,44 @@ export default function Home() {
 
         case 5: // Eligibility Verification (Medical Codes)
           setAiStepSummary("Verifying medical eligibility based on codes...");
-          // Simulate medical code validation
-          let isEligible = false;
-          let verificationMessage = "No eligible medical codes found or codes conflict with policy rules.";
-          if (claimData.medicalCodes && claimData.medicalCodes.length > 0) {
-            isEligible = claimData.medicalCodes.some(code => medicalCodes.eligibleCodes.includes(code)) &&
-                         !claimData.medicalCodes.some(code => medicalCodes.ineligibleCodes.includes(code));
-            if(isEligible) {
-              verificationMessage = `Medical codes ${claimData.medicalCodes.join(', ')} verified. Claim appears medically eligible.`;
+          let isMedicallyEligible = false;
+          let medicalVerificationMessage = "No eligible medical codes found or codes conflict with policy rules.";
+          
+          const codesToVerify = claimData.medicalCodes || (ocrOutput?.medicalCodes as string[]) || [];
+
+          if (codesToVerify.length > 0) {
+            isMedicallyEligible = codesToVerify.some(code => medicalCodes.eligibleCodes.includes(code)) &&
+                         !codesToVerify.some(code => medicalCodes.ineligibleCodes.includes(code));
+            if(isMedicallyEligible) {
+              medicalVerificationMessage = `Medical codes ${codesToVerify.join(', ')} verified. Claim appears medically eligible.`;
             } else {
-              verificationMessage = `Medical codes ${claimData.medicalCodes.join(', ')} include ineligible codes or miss eligible ones.`;
-            }
-          } else if (ocrOutput && ocrOutput.medicalCodes && (ocrOutput.medicalCodes as string[]).length > 0) {
-             // Try using codes from OCR if not directly in claimData
-            const ocrMedCodes = ocrOutput.medicalCodes as string[];
-             isEligible = ocrMedCodes.some(code => medicalCodes.eligibleCodes.includes(code)) &&
-                         !ocrMedCodes.some(code => medicalCodes.ineligibleCodes.includes(code));
-            if(isEligible) {
-              verificationMessage = `Medical codes ${ocrMedCodes.join(', ')} (from OCR) verified. Claim appears medically eligible.`;
-            } else {
-              verificationMessage = `Medical codes ${ocrMedCodes.join(', ')} (from OCR) include ineligible codes or miss eligible ones.`;
+              medicalVerificationMessage = `Medical codes ${codesToVerify.join(', ')} include ineligible codes or miss eligible ones.`;
             }
           }
-
-          setMedicalVerificationResult({ status: isEligible ? 'Eligible' : 'Ineligible', message: verificationMessage, isEligible });
-          setAiStepSummary(verificationMessage);
-          setCurrentStepStatus(isEligible ? 'completed' : 'error');
-          if (!isEligible) {
+          setMedicalVerificationResult({ status: isMedicallyEligible ? 'Eligible' : 'Ineligible', message: medicalVerificationMessage, isEligible: isMedicallyEligible });
+          setAiStepSummary(medicalVerificationMessage);
+          setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error');
+          if (!isMedicallyEligible) {
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
           }
           break;
 
         case 6: // Summary & Decision
-          if (!medicalVerificationResult) { // Ensure previous step ran
-             setAiStepSummary("Medical verification must be completed first.");
+          if (!medicalVerificationResult || !eligibilityCheckResult) { 
+             setAiStepSummary("Eligibility and Medical verification must be completed first.");
              setCurrentStepStatus('error');
              break;
           }
           setAiStepSummary("Generating final decision summary with AI...");
-          // Simulate settlement amount or derive it
-          const settlementAmount = medicalVerificationResult.isEligible ? claimData.claimedAmount * 0.9 : 0; // Example: 90% if eligible
+          const isOverallEligible = medicalVerificationResult.isEligible && eligibilityCheckResult.status === 'Eligible';
+          const settlementAmount = isOverallEligible ? claimData.claimedAmount * 0.9 : 0; 
           setClaimData(prev => ({ ...prev!, settlementAmount }));
 
           const summaryResult = await generateClaimSummary({
             claimAmount: claimData.claimedAmount,
             settlementAmount: settlementAmount,
-            isEligible: medicalVerificationResult.isEligible && (eligibilityCheckResult?.status === 'Eligible'),
-            reason: medicalVerificationResult.message + " | " + (eligibilityCheckResult?.message || ""),
+            isEligible: isOverallEligible,
+            reason: `${medicalVerificationResult.message} | ${eligibilityCheckResult.message}`,
           });
           setDecisionSummary(summaryResult);
           setAiStepSummary(<>Decision: <strong>{summaryResult.decision}</strong>. {summaryResult.summary}</>);
@@ -286,7 +346,7 @@ export default function Home() {
           setMissingInfoEmail(emailResult);
           setAiStepSummary("AI generated a draft email to request missing information. See details below.");
           setCurrentStepStatus('info');
-          setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); // No longer processing actively
+          setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); 
           break;
         
         default:
@@ -300,21 +360,20 @@ export default function Home() {
       setAiStepSummary(`An error occurred: ${error.message}. Check console for details.`);
       setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
     } finally {
-      // Only set loading to false if not jumped to step 7
-      if (currentStep !== 4 || (currentStep === 4 && claimData?.missingInformation?.length === 0)) {
+      if (!(currentStep === 4 && claimData?.missingInformation?.length && claimData.missingInformation.length > 0)) {
          setIsLoading(false);
       }
     }
-  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult]);
+  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult, resetFlowStates, availableClaims]);
 
   const renderStepContent = () => {
-    if (isLoading && currentStep === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Initial Data...</p></div>;
-    if (!claimData || !memberData || !medicalCodes) return <p className="text-center text-lg text-muted-foreground p-8">Initializing application data. Please wait or reload if this persists.</p>;
-
+    if (isLoading && !claimData && currentStep === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Application Data...</p></div>;
+    
+    // Common buttons
     const commonActionButton = (text: string = "Process This Step") => ({
       text: text,
       onClick: handleProcessStep,
-      disabled: isLoading || currentStepStatus === 'completed' || currentStepStatus === 'error' && currentStep !== 7, // Allow processing for missing info
+      disabled: isLoading || currentStepStatus === 'completed' || (currentStepStatus === 'error' && currentStep !== 7 && currentStep !== 2 && currentStep !== 5),
       loading: isLoading && currentStepStatus === 'in-progress',
     });
     
@@ -333,10 +392,25 @@ export default function Home() {
               <CardDescription>AI-Powered Claims Validation System Prototype</CardDescription>
             </CardHeader>
             <CardContent>
-              <p className="mb-6">Click the button below to start processing a sample claim.</p>
-              <Button size="lg" onClick={proceedToNextStep} disabled={isLoading}>
-                Start Claim Processing
-              </Button>
+              {claimData ? (
+                <>
+                  <p className="mb-2">Currently loaded: <strong>{selectedClaimFile?.name || 'Unknown Claim'}</strong> (ID: {claimData.claimId})</p>
+                  <p className="mb-6">{aiStepSummary || 'Click the button below to start processing this claim.'}</p>
+                  <Button size="lg" onClick={proceedToNextStep} disabled={isLoading}>
+                    Start Processing This Claim
+                  </Button>
+                  <Button size="lg" variant="outline" onClick={() => setIsClaimSelectionModalOpen(true)} disabled={isLoading} className="ml-4">
+                    <List className="mr-2 h-5 w-5" /> Select Different Claim
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="mb-6">{aiStepSummary || 'Please select a claim to begin processing.'}</p>
+                  <Button size="lg" onClick={() => setIsClaimSelectionModalOpen(true)} disabled={isLoading || availableClaims.length === 0}>
+                     <List className="mr-2 h-5 w-5" /> Select Claim to Process
+                  </Button>
+                </>
+              )}
             </CardContent>
           </Card>
         );
@@ -355,14 +429,19 @@ export default function Home() {
           <ClaimStepCard
             stepNumber={2} title="Policy & Member Eligibility Check" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.yellow}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton() : (eligibilityCheckResult?.status === 'Ineligible' ? {text: "Process Blocked", onClick:()=>{}, disabled:true} : commonActionButton())}
+            actionButton={
+              currentStepStatus === 'completed' ? nextStepButton() : 
+              (eligibilityCheckResult?.status === 'Ineligible' ? 
+                {text: "Process Blocked (Ineligible)", onClick: handleReset, disabled:isLoading, variant: "destructive"} : 
+                commonActionButton())
+            }
           >
             {eligibilityCheckResult && (
               <p className={`font-semibold ${eligibilityCheckResult.status === 'Eligible' ? 'text-google-green' : 'text-google-red'}`}>
                 {eligibilityCheckResult.status}: {eligibilityCheckResult.message}
               </p>
             )}
-            <ClaimDetailsView data={{ claimantAadhaar: claimData.claimantAadhaar, policyNumber: claimData.policyNumber }} title="Data Used for Check" />
+            <ClaimDetailsView data={{ claimantAadhaar: claimData?.claimantAadhaar, policyNumber: claimData?.policyNumber }} title="Data Used for Check" />
           </ClaimStepCard>
         );
       case 3: // OCR + GenAI
@@ -396,14 +475,19 @@ export default function Home() {
           <ClaimStepCard
             stepNumber={5} title="Medical Eligibility Verification" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.blue}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton() : (medicalVerificationResult?.status === 'Ineligible' ? {text: "Process Blocked", onClick:()=>{}, disabled:true} : commonActionButton())}
+             actionButton={
+              currentStepStatus === 'completed' ? nextStepButton() : 
+              (medicalVerificationResult?.isEligible === false ?  // Check specific boolean false
+                {text: "Process Blocked (Medically Ineligible)", onClick:handleReset, disabled:isLoading, variant: "destructive"} : 
+                commonActionButton())
+            }
           >
             {medicalVerificationResult && (
               <p className={`font-semibold ${medicalVerificationResult.isEligible ? 'text-google-green' : 'text-google-red'}`}>
                 Status: {medicalVerificationResult.status} - {medicalVerificationResult.message}
               </p>
             )}
-             <ClaimDetailsView data={{ medicalCodesUsed: claimData.medicalCodes, rulesSnapshot: medicalCodes.eligibleCodes.slice(0,2).concat(medicalCodes.ineligibleCodes.slice(0,1)) }} title="Data Used for Verification" />
+             <ClaimDetailsView data={{ medicalCodesUsed: claimData?.medicalCodes, rulesSnapshot: medicalCodes?.eligibleCodes.slice(0,2).concat(medicalCodes.ineligibleCodes.slice(0,1)) }} title="Data Used for Verification" />
           </ClaimStepCard>
         );
       case 6: // Summary & Decision
@@ -412,9 +496,9 @@ export default function Home() {
             stepNumber={6} title="Final Summary & Decision" status={currentStepStatus}
             aiSummary={aiStepSummary}
             borderColorClass={decisionSummary?.decision === 'Approved' ? GOOGLE_COLORS.green : (decisionSummary?.decision === 'Rejected' ? GOOGLE_COLORS.red : GOOGLE_COLORS.muted)}
-            actionButton={currentStepStatus === 'completed' ? { text: "Process Complete. Reset to Start.", onClick: handleReset } : commonActionButton()}
+            actionButton={currentStepStatus === 'completed' ? { text: "Process Complete. Reset Current Claim.", onClick: handleReset } : commonActionButton()}
           >
-            {decisionSummary && (
+            {decisionSummary && claimData && (
               <>
                 <p className={`text-2xl font-bold ${decisionSummary.decision === 'Approved' ? 'text-google-green' : 'text-google-red'}`}>
                   {decisionSummary.decision.toUpperCase()}
@@ -436,15 +520,14 @@ export default function Home() {
              actionButton={{
                 text: "Simulate Info Provided & Retry Consistency Check",
                 onClick: () => {
-                    // Simulate providing info, e.g. clearing missingInformation array
-                    // and maybe adding some placeholder to diagnosis if it was missing.
-                    setClaimData(prev => ({ ...prev!, missingInformation: [], diagnosis: prev?.diagnosis || "Updated Diagnosis" }));
-                    setCurrentStep(4); // Go back to consistency check
+                    if (!claimData) return;
+                    setClaimData(prev => ({ ...prev!, missingInformation: [], diagnosis: prev?.diagnosis || "Updated Diagnosis after missing info provided" }));
+                    setCurrentStep(4); 
                     setCurrentStepStatus('pending');
                     setAiStepSummary('Simulated information provided. Retrying consistency check...');
-                    setIsLoading(false); // Ensure loading is false before triggering new step processing
+                    setIsLoading(false); 
                 },
-                disabled: isLoading,
+                disabled: isLoading || !claimData,
                 loading: isLoading && currentStepStatus === 'in-progress',
             }}
           >
@@ -457,11 +540,11 @@ export default function Home() {
                 </ScrollArea>
               </div>
             )}
-             <ClaimDetailsView data={{missingItems: claimData.missingInformation}} title="Items Marked as Missing" />
+             <ClaimDetailsView data={{missingItems: claimData?.missingInformation}} title="Items Marked as Missing" />
           </ClaimStepCard>
         );
       default:
-        return <p>Invalid step.</p>;
+        return <p>Invalid step. Please select a claim to start.</p>;
     }
   };
 
@@ -470,8 +553,43 @@ export default function Home() {
       <Header />
       <main className="flex-grow container mx-auto px-4 py-8">
         <DashboardMetrics {...dashboardMetrics} />
+        
         {renderStepContent()}
+
         <AdminPanel onReset={handleReset} />
+
+        <Dialog open={isClaimSelectionModalOpen} onOpenChange={setIsClaimSelectionModalOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Select Claim to Process</DialogTitle>
+              <DialogDescription>
+                Choose a claim file from the list below to start the validation process.
+              </DialogDescription>
+            </DialogHeader>
+            <ScrollArea className="h-[300px] my-4">
+              <div className="grid gap-2 p-1">
+                {availableClaims.length > 0 ? availableClaims.map((file) => (
+                  <Button
+                    key={file.path}
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => handleSelectClaimFile(file)}
+                  >
+                    {file.name}
+                  </Button>
+                )) : <p>No claim files found. Check `public/data/available_claims.json`.</p>}
+              </div>
+            </ScrollArea>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="secondary">
+                  Cancel
+                </Button>
+              </DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
       </main>
       <footer className="text-center py-4 text-sm text-muted-foreground border-t">
         ClaimWise AI &copy; {new Date().getFullYear()} - Powered by Firebase Studio & Genkit
@@ -479,3 +597,4 @@ export default function Home() {
     </div>
   );
 }
+
