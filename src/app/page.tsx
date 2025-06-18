@@ -445,8 +445,8 @@ export default function Home() {
         return (
           <Card className="shadow-xl text-center p-8">
             <CardHeader>
-              <CardTitle className="text-3xl font-headline">Welcome to ClaimWise AI</CardTitle>
-              <CardDescription>AI-Powered Claims Validation System Prototype</CardDescription>
+              <CardTitle className="text-3xl font-headline">ClaimWise AI</CardTitle>
+              <CardDescription className="underline decoration-red-500 decoration-2">An agentic framework for claim validation - Prototype. </CardDescription>
             </CardHeader>
             <CardContent>
               {claimData ? (
