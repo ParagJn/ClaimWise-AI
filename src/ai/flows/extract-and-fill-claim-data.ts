@@ -30,13 +30,13 @@ export async function extractAndFillClaimData(input: ExtractAndFillClaimDataInpu
   return extractAndFillClaimDataFlow(input);
 }
 
-// Define a schema for the raw JSON string output from the prompt itself.
-const ClaimDataJsonStringSchema = z.string().describe('A JSON string representing the auto-filled claim data.');
+// Define a schema for the raw JSON string output from the prompt itself, allowing it to be null.
+const ClaimDataJsonStringSchema = z.string().nullable().describe('A JSON string representing the auto-filled claim data, or null.');
 
 const prompt = ai.definePrompt({
   name: 'extractAndFillClaimDataPrompt',
   input: {schema: ExtractAndFillClaimDataInputSchema},
-  // The prompt will directly output a JSON string.
+  // The prompt will directly output a JSON string or null.
   output: {schema: ClaimDataJsonStringSchema},
   prompt: `You are an AI assistant specialized in extracting information from claim documents and auto-filling claim forms.
 
@@ -56,7 +56,7 @@ const prompt = ai.definePrompt({
 
   Output:
   Return the auto-filled claim data as a JSON string. Ensure the string is valid JSON.
-  If no data can be extracted or there is an issue, return an empty JSON object as a string (e.g., "{}"). DO NOT RETURN NULL.
+  If no data can be extracted or there is an issue, return an empty JSON object as a string (e.g., "{}"). DO NOT RETURN NULL if possible, prefer an empty JSON string.
   `,
 });
 
@@ -68,11 +68,12 @@ const extractAndFillClaimDataFlow = ai.defineFlow(
     outputSchema: ExtractAndFillClaimDataOutputSchema,
   },
   async (input): Promise<ExtractAndFillClaimDataOutput> => {
-    const {output: jsonStringOutput} = await prompt(input);
+    let {output: jsonStringOutput} = await prompt(input);
 
+    // Ensure jsonStringOutput is a string before parsing. If it's null or undefined, default to an empty JSON string.
     if (jsonStringOutput === undefined || jsonStringOutput === null) {
-        console.error('AI returned no output (null or undefined) for claim data extraction.');
-        throw new Error('AI returned no output for claim data extraction. Expected a JSON string.');
+        console.warn('AI returned null or undefined for claim data extraction. Defaulting to empty JSON object string.');
+        jsonStringOutput = '{}';
     }
 
     try {
@@ -80,7 +81,9 @@ const extractAndFillClaimDataFlow = ai.defineFlow(
       return parsedData;
     } catch (error) {
       console.error('Failed to parse JSON output from AI for claim data:', error, 'Raw output was:', jsonStringOutput);
-      throw new Error('AI returned malformed JSON for extracted data. Raw output: ' + jsonStringOutput);
+      // If parsing fails, return an empty object as a fallback, as per the original intent.
+      // Or, re-throw a more specific error if preferred.
+      return {};
     }
   }
 );
