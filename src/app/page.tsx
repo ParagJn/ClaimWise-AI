@@ -8,9 +8,9 @@ import ClaimStepCard from '@/components/ClaimStepCard';
 import AdminPanel from '@/components/AdminPanel';
 import ClaimDetailsView from '@/components/ClaimDetailsView';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogClose, DialogFooter } from '@/components/ui/dialog';
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, AlertTriangle, Info, List } from 'lucide-react';
 
@@ -113,7 +113,7 @@ export default function Home() {
     setDecisionSummary(null);
     setMissingInfoEmail(null);
     setCurrentStepStatus('pending');
-    // Only reset processingClaims, keep validated and rejected counts for accumulation
+    // Only reset processingClaims, keep validated and rejected counts for accumulation until admin reset
     setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); 
   }, []);
   
@@ -188,29 +188,28 @@ export default function Home() {
 
   const handleReset = () => { // Admin Panel Reset
     setCurrentStep(0);
-    resetFlowStates(); // Resets flow states and sets processingClaims to 0
+    resetFlowStates(); 
 
-    // Explicitly reset validated and rejected claims for a full admin reset, preserve totalClaims
     setDashboardMetrics(prev => ({ 
       ...initialDashboardMetrics, 
       totalClaims: prev.totalClaims, 
     }));
 
-    if (initialClaimData && selectedClaimFile) { // Only reload if a claim was truly selected and processed
+    if (initialClaimData && selectedClaimFile) { 
       setClaimData(JSON.parse(JSON.stringify(initialClaimData))); 
       setAiStepSummary(`Claim "${selectedClaimFile.name}" reloaded. Click "Start Processing This Claim" to begin.`);
-    } else { // If no claim was fully loaded or if it's the initial state
+    } else { 
       setClaimData(null); 
       setInitialClaimData(null);
       setSelectedClaimFile(null);
       setAiStepSummary('Select a claim to begin processing.');
     }
-    toast({ title: "Process Fully Reset", description: "Current claim process and dashboard counts (validated/rejected) have been reset." });
+    toast({ title: "Process Fully Reset", description: "Current claim process and all dashboard counts have been reset." });
   };
 
   const handleProcessAnotherClaim = () => {
     setCurrentStep(0);
-    resetFlowStates(); // Resets flow states and sets processingClaims to 0. Validated/Rejected are preserved by this function.
+    resetFlowStates(); 
     setClaimData(null);
     setInitialClaimData(null);
     setSelectedClaimFile(null);
@@ -272,7 +271,6 @@ export default function Home() {
             setEligibilityCheckResult({ status: 'Ineligible', message: 'Member data is not available or empty. Cannot perform eligibility check.' });
             setAiStepSummary('Member data is missing or empty. Please check data files and ensure member_data.json is correctly populated and loaded.');
             setCurrentStepStatus('error');
-            // Do not update rejectedClaims here, Step 6 handles final decision
             break;
           }
           
@@ -323,7 +321,7 @@ export default function Home() {
               setClaimData(prev => ({...prev!, missingInformation: consistencyResult.inconsistencies}));
               setCurrentStep(7); 
               setIsLoading(false); 
-              setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); // Moved to step 7 explicitly
+              setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
               return; 
             }
           } else {
@@ -351,36 +349,22 @@ export default function Home() {
           setMedicalVerificationResult({ status: isMedicallyEligible ? 'Eligible' : 'Ineligible', message: medicalVerificationMessage, isEligible: isMedicallyEligible });
           setAiStepSummary(medicalVerificationMessage);
           setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error');
-          // Do not update rejectedClaims here
           break;
 
         case 6: // Summary & Decision
           if (!medicalVerificationResult || !eligibilityCheckResult) { 
              setAiStepSummary("Eligibility and Medical verification must be completed first.");
              setCurrentStepStatus('error');
-             // Ensure processingClaims is set to 0 if we error out here before decision
              setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
              break;
           }
           
-          const wasEligibilityOverridden = eligibilityCheckResult.status === 'Ineligible' && medicalVerificationResult?.isEligible === true; 
-          const wasMedicalOverridden = medicalVerificationResult?.isEligible === false && eligibilityCheckResult.status === 'Eligible'; 
-          const bothOverridden = eligibilityCheckResult.status === 'Ineligible' && medicalVerificationResult?.isEligible === false;
-
-
           setAiStepSummary("Generating final decision summary with AI...");
           
-          let isOverallEligible = (eligibilityCheckResult.status === 'Eligible' && medicalVerificationResult.isEligible);
-          // Check if an override occurred. If an override button was clicked, the corresponding status would have been effectively 'Eligible' for this check.
-          // The actual results are in eligibilityCheckResult and medicalVerificationResult
-          // If overrideModalConfig.onConfirm was called, it called proceedToNextStep. The results are still the original ones.
-          // We need to track if override happened. A simple way is to see if proceedToNextStep was called despite error.
-          // Let's re-evaluate isOverallEligible based on current component state.
-
           const userOverrodeEligibility = eligibilityCheckResult.status === 'Ineligible' && (overrideModalConfig?.title.includes("Eligibility"));
           const userOverrodeMedical = medicalVerificationResult.isEligible === false && (overrideModalConfig?.title.includes("Medical"));
 
-          isOverallEligible = (eligibilityCheckResult.status === 'Eligible' || userOverrodeEligibility) && 
+          let isOverallEligible = (eligibilityCheckResult.status === 'Eligible' || userOverrodeEligibility) && 
                               (medicalVerificationResult.isEligible || userOverrodeMedical);
 
 
@@ -401,7 +385,7 @@ export default function Home() {
           } else {
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: prev.rejectedClaims + 1 }));
           }
-          setOverrideModalConfig(null); // Clear override state after decision
+          setOverrideModalConfig(null); 
           break;
 
         case 7: // Missing Info Path
@@ -434,7 +418,6 @@ export default function Home() {
       if (!(currentStep === 4 && claimData?.missingInformation?.length && claimData.missingInformation.length > 0 && currentStepStatus !== 'completed')) {
          setIsLoading(false);
       }
-      // Reset override config if the step is completed or errored out without override path.
       if (currentStepStatus === 'completed' || (currentStepStatus === 'error' && !(currentStep === 2 || currentStep === 5))) {
         setOverrideModalConfig(null);
       }
@@ -444,14 +427,14 @@ export default function Home() {
   const renderStepContent = () => {
     if (isLoading && !claimData && currentStep === 0 && availableClaims.length === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Application Data...</p></div>;
     
-    const commonActionButton = (text: string = "Process This Step") => ({
+    const commonActionButton = (text: string) => ({
       text: text,
       onClick: handleProcessStep,
       disabled: isLoading || currentStepStatus === 'completed' || (currentStepStatus === 'error' && currentStep !== 7 && currentStep !== 2 && currentStep !== 5),
       loading: isLoading && currentStepStatus === 'in-progress',
     });
     
-    const nextStepButton = (text: string = "Proceed to Next Step") => ({
+    const nextStepButton = (text: string) => ({
         text: text,
         onClick: proceedToNextStep,
         disabled: isLoading || (currentStepStatus !== 'completed' && !(currentStepStatus === 'error' && (currentStep === 2 || currentStep === 5)) && currentStepStatus !== 'info'),
@@ -494,32 +477,21 @@ export default function Home() {
           <ClaimStepCard
             stepNumber={1} title="Claim Submission" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.blue}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton() : commonActionButton()}
+            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Eligibility Check") : commonActionButton("Register Claim")}
           >
             <ClaimDetailsView data={claimData} title="Initial Claim Data" />
           </ClaimStepCard>
         );
-      case 2: // Eligibility Check
+      case 2: // Policy & Member Eligibility Check
         return (
           <ClaimStepCard
             stepNumber={2} title="Policy & Member Eligibility Check" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.yellow}
             actionButton={
-              currentStepStatus === 'completed' ? nextStepButton() :
+              currentStepStatus === 'completed' ? nextStepButton("Proceed to Data Extraction") :
               (eligibilityCheckResult?.status === 'Ineligible' && currentStepStatus === 'error' ?
-                {
-                  text: "Override Eligibility Issue?",
-                  onClick: () => handleShowOverrideModal(
-                    "Confirm Override: Eligibility",
-                    `${eligibilityCheckResult.message}. Do you want to override this and continue processing?`,
-                    () => {
-                      proceedToNextStep();
-                    }
-                  ),
-                  disabled: isLoading,
-                  variant: "destructive" as const // Cast for Button variant prop
-                } :
-                commonActionButton())
+                null : 
+                commonActionButton("Check Eligibility"))
             }
           >
             {eligibilityCheckResult && (
@@ -528,6 +500,40 @@ export default function Home() {
               </p>
             )}
             <ClaimDetailsView data={{ claimantAadhaar: claimData?.claimantAadhaar, policyNumber: claimData?.policyNumber }} title="Data Used for Check" />
+            
+            {eligibilityCheckResult?.status === 'Ineligible' && currentStepStatus === 'error' && (
+              <CardFooter className="pt-4 flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    resetFlowStates();
+                    setCurrentStep(0);
+                    setClaimData(null);
+                    setInitialClaimData(null);
+                    setSelectedClaimFile(null);
+                    setAiStepSummary('Claim eligibility check failed. Select a new claim or override.');
+                    setIsClaimSelectionModalOpen(true);
+                    setOverrideModalConfig(null);
+                  }}
+                  disabled={isLoading}
+                  className="w-full sm:w-auto"
+                >
+                  <List className="mr-2 h-4 w-4" /> Select Different Claim
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleShowOverrideModal(
+                    "Confirm Override: Eligibility",
+                    `${eligibilityCheckResult.message}. Do you want to override this and continue processing?`,
+                    () => { proceedToNextStep(); }
+                  )}
+                  disabled={isLoading}
+                  className="w-full sm:w-auto"
+                >
+                  Override Eligibility & Continue
+                </Button>
+              </CardFooter>
+            )}
           </ClaimStepCard>
         );
       case 3: // OCR + GenAI
@@ -535,7 +541,7 @@ export default function Home() {
           <ClaimStepCard
             stepNumber={3} title="Document Data Extraction (OCR + GenAI)" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.green}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton() : commonActionButton()}
+            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Consistency Check") : commonActionButton("Extract Document Data")}
           >
             {ocrOutput && <ClaimDetailsView data={ocrOutput} title="AI Extracted/Filled Data" />}
             <p className="text-xs text-muted-foreground mt-2">Simulated document: placeholder 1x1 pixel image.</p>
@@ -546,7 +552,7 @@ export default function Home() {
           <ClaimStepCard
             stepNumber={4} title="Claim Consistency Check (RAG + GenAI)" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.red}
-            actionButton={currentStepStatus === 'completed' ? nextStepButton() : commonActionButton()}
+            actionButton={currentStepStatus === 'completed' ? nextStepButton("Proceed to Medical Verification") : commonActionButton("Run Consistency Check")}
           >
             {inconsistencies && (
               <>
@@ -562,21 +568,10 @@ export default function Home() {
             stepNumber={5} title="Medical Eligibility Verification" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.blue}
             actionButton={
-              currentStepStatus === 'completed' ? nextStepButton() :
+              currentStepStatus === 'completed' ? nextStepButton("Proceed to Final Summary") :
               (medicalVerificationResult?.isEligible === false && currentStepStatus === 'error' ?
-                {
-                  text: "Override Medical Ineligibility?",
-                  onClick: () => handleShowOverrideModal(
-                    "Confirm Override: Medical Verification",
-                    `${medicalVerificationResult.message}. Do you want to override this and continue processing?`,
-                    () => {
-                       proceedToNextStep();
-                    }
-                  ),
-                  disabled: isLoading,
-                  variant: "destructive" as const // Cast for Button variant prop
-                } :
-                commonActionButton())
+                null : 
+                commonActionButton("Verify Medical Codes"))
             }
           >
             {medicalVerificationResult && (
@@ -584,7 +579,41 @@ export default function Home() {
                 Status: {medicalVerificationResult.isEligible ? 'Eligible' : 'Ineligible'} - {medicalVerificationResult.message}
               </p>
             )}
-             <ClaimDetailsView data={{ medicalCodesUsed: claimData?.medicalCodes, rulesSnapshot: medicalCodes?.eligibleCodes.slice(0,2).concat(medicalCodes.ineligibleCodes.slice(0,1)) }} title="Data Used for Verification" />
+            <ClaimDetailsView data={{ medicalCodesUsed: claimData?.medicalCodes, rulesSnapshot: medicalCodes?.eligibleCodes.slice(0,2).concat(medicalCodes.ineligibleCodes.slice(0,1)) }} title="Data Used for Verification" />
+            
+            {medicalVerificationResult?.isEligible === false && currentStepStatus === 'error' && (
+               <CardFooter className="pt-4 flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    resetFlowStates();
+                    setCurrentStep(0);
+                    setClaimData(null);
+                    setInitialClaimData(null);
+                    setSelectedClaimFile(null);
+                    setAiStepSummary('Medical verification failed. Select a new claim or override.');
+                    setIsClaimSelectionModalOpen(true);
+                    setOverrideModalConfig(null);
+                  }}
+                  disabled={isLoading}
+                  className="w-full sm:w-auto"
+                >
+                  <List className="mr-2 h-4 w-4" /> Select Different Claim
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleShowOverrideModal(
+                    "Confirm Override: Medical Verification",
+                    `${medicalVerificationResult.message}. Do you want to override this and continue processing?`,
+                    () => { proceedToNextStep(); }
+                  )}
+                  disabled={isLoading}
+                  className="w-full sm:w-auto"
+                >
+                  Override Medical Ineligibility & Continue
+                </Button>
+              </CardFooter>
+            )}
           </ClaimStepCard>
         );
       case 6: // Summary & Decision
@@ -600,7 +629,7 @@ export default function Home() {
                 onClick: handleProcessAnotherClaim,
                 disabled: isLoading 
               } : 
-              commonActionButton()
+              commonActionButton("Generate Decision")
             }
           >
             {decisionSummary && claimData && (
@@ -631,7 +660,6 @@ export default function Home() {
                     setCurrentStepStatus('pending');
                     setAiStepSummary('Simulated information provided. Retrying consistency check...');
                     setIsLoading(false); 
-                    // Ensure processingClaims is correctly set when moving back
                     setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
                 },
                 disabled: isLoading || !claimData,
@@ -705,7 +733,7 @@ export default function Home() {
                 {overrideModalConfig?.message}
               </DialogDescription>
             </DialogHeader>
-            <DialogFooter className="sm:justify-end">
+            <DialogFooter className="sm:justify-end space-x-2">
               <Button variant="outline" onClick={() => {setIsOverrideModalOpen(false); setOverrideModalConfig(null);}}>
                 Cancel
               </Button>
@@ -715,7 +743,9 @@ export default function Home() {
                     overrideModalConfig.onConfirm();
                   }
                   setIsOverrideModalOpen(false);
-                  // setOverrideModalConfig(null); // Cleared in onConfirm or finally block
+                  // Deliberately not clearing overrideModalConfig here, 
+                  // as it's used in handleProcessStep for step 6 decision logic
+                  // It will be cleared in handleProcessStep's finally block or when a new override is set.
                 }}
               >
                 Yes, Continue Processing
@@ -732,3 +762,5 @@ export default function Home() {
   );
 }
       
+
+    
