@@ -1,19 +1,53 @@
-
 {
   "members": [
     {
       "aadhaarNumber": "123456789012",
-      "name": "John Doe",
-      "policyNumber": "POL98765",
+      "name": "Amit Sharma",
+      "policyNumber": "POL123456",
       "policyStatus": "Active",
-      "premiumPaidDate": "2023-09-01"
+      "premiumPaidDate": "2024-01-15"
     },
     {
-      "aadhaarNumber": "987654321098",
-      "name": "Jane Smith",
-      "policyNumber": "POL54321",
+      "aadhaarNumber": "234567890123",
+      "name": "Ramesh Kumar",
+      "policyNumber": "POL345678",
+      "policyStatus": "Active",
+      "premiumPaidDate": "2024-02-01"
+    },
+    {
+      "aadhaarNumber": "345678901234",
+      "name": "Priya Singh",
+      "policyNumber": "POL654321",
       "policyStatus": "Inactive",
-      "premiumPaidDate": "2022-08-15"
+      "premiumPaidDate": "2023-11-20"
+    },
+    {
+      "aadhaarNumber": "456789012345",
+      "name": "Sunita Devi",
+      "policyNumber": "POL987654",
+      "policyStatus": "Active",
+      "premiumPaidDate": "2024-03-05"
+    },
+    {
+      "aadhaarNumber": "567890123456",
+      "name": "Vijay Patel",
+      "policyNumber": "POL112233",
+      "policyStatus": "Active",
+      "premiumPaidDate": "2024-01-25"
+    },
+    {
+      "aadhaarNumber": "678901234567",
+      "name": "Anjali Mehta",
+      "policyNumber": "POL445566",
+      "policyStatus": "Inactive",
+      "premiumPaidDate": "2023-10-10"
+    },
+    {
+      "aadhaarNumber": "789012345678",
+      "name": "Suresh Reddy",
+      "policyNumber": "POL778899",
+      "policyStatus": "Active",
+      "premiumPaidDate": "2024-02-18"
     }
   ]
 }

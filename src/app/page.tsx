@@ -108,7 +108,7 @@ export default function Home() {
     setCurrentStepStatus('pending');
     setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims })); // Keep totalClaims
   }, []);
-
+  
   const loadClaimSpecificData = useCallback(async (claimFilePath: string) => {
     setIsLoading(true);
     resetFlowStates(); 
@@ -231,19 +231,29 @@ export default function Home() {
           const searchAadhaar = claimData.claimantAadhaar.trim();
           const searchPolicyNumber = claimData.policyNumber.trim();
 
+          if (!memberData || !Array.isArray(memberData.members) || memberData.members.length === 0) {
+            setEligibilityCheckResult({ status: 'Ineligible', message: 'Member data is not available or empty. Cannot perform eligibility check.' });
+            setAiStepSummary('Member data is missing or empty. Please check data files and ensure member_data.json is correctly populated and loaded.');
+            setCurrentStepStatus('error');
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
+            break;
+          }
+
           const member = memberData.members.find(m =>
             m.aadhaarNumber.trim() === searchAadhaar &&
             m.policyNumber.trim() === searchPolicyNumber
           );
 
           if (member && member.policyStatus === 'Active') {
-            setEligibilityCheckResult({ status: 'Eligible', message: `Policy ${member.policyNumber} is Active for ${member.name}. Premium paid on ${member.premiumPaidDate}.` });
+            setEligibilityCheckResult({ status: 'Eligible', message: `Policy ${member.policyNumber.trim()} is Active for ${member.name}. Premium paid on ${member.premiumPaidDate}.` });
             setAiStepSummary(`Policy holder ${member.name} is eligible. Policy status: Active.`);
             setCurrentStepStatus('completed');
           } else {
             let reason = "Policy/Member not found";
             if (member && member.policyStatus !== 'Active') {
-              reason = `Policy found for ${member.name} (Aadhaar: ${member.aadhaarNumber}) but status is ${member.policyStatus}.`;
+              reason = `Policy found for ${member.name} (Aadhaar: ${member.aadhaarNumber.trim()}) but status is ${member.policyStatus}.`;
+            } else if (!member) {
+              // Reason remains "Policy/Member not found"
             }
             const debugMessage = `${reason}. Searched Aadhaar: '${searchAadhaar}', Policy: '${searchPolicyNumber}'.`;
             setEligibilityCheckResult({ status: 'Ineligible', message: debugMessage });
@@ -602,3 +612,4 @@ export default function Home() {
     </div>
   );
 }
+
