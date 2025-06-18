@@ -98,9 +98,48 @@ export default function Home() {
 
   const [dashboardMetrics, setDashboardMetrics] = useState(initialDashboardMetrics);
 
+  const resetFlowStates = useCallback(() => {
+    setOcrOutput(null);
+    setInconsistencies(null);
+    setEligibilityCheckResult(null);
+    setMedicalVerificationResult(null);
+    setDecisionSummary(null);
+    setMissingInfoEmail(null);
+    setCurrentStepStatus('pending');
+    setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims })); // Keep totalClaims
+  }, []);
+
+  const loadClaimSpecificData = useCallback(async (claimFilePath: string) => {
+    setIsLoading(true);
+    resetFlowStates(); 
+    setCurrentStep(0); 
+    try {
+      const claimRes = await fetch(claimFilePath);
+      if (!claimRes.ok) throw new Error(`Failed to load claim data from ${claimFilePath}.`);
+      
+      const claimJson: ClaimData = await claimRes.json();
+      setClaimData(claimJson);
+      setInitialClaimData(claimJson); 
+      
+      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 0, rejectedClaims: 0 }));
+      setCurrentStep(0); 
+      setAiStepSummary(`Claim "${availableClaims.find(c => c.path === claimFilePath)?.name || 'Selected Claim'}" loaded. Click "Start Processing This Claim" to begin.`);
+
+    } catch (error) {
+      console.error("Error loading claim-specific data:", error);
+      toast({ title: "Error", description: `Failed to load selected claim data. ${error instanceof Error ? error.message : ''}`, variant: "destructive" });
+      setCurrentStepStatus('error');
+      setAiStepSummary('Failed to load the selected claim. Please try another or check console.');
+      setClaimData(null);
+      setInitialClaimData(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast, resetFlowStates, availableClaims]);
+
+
   const fetchCoreData = useCallback(async () => {
-    // Fetches member_data and medical_codes once
-    if (memberData && medicalCodes) return; // Already loaded
+    if (memberData && medicalCodes && availableClaims.length > 0) return; 
     
     setIsLoading(true);
     try {
@@ -125,50 +164,8 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, [toast, memberData, medicalCodes]);
+  }, [toast, memberData, medicalCodes, availableClaims]);
 
-  const resetFlowStates = useCallback(() => {
-    setOcrOutput(null);
-    setInconsistencies(null);
-    setEligibilityCheckResult(null);
-    setMedicalVerificationResult(null);
-    setDecisionSummary(null);
-    setMissingInfoEmail(null);
-    setCurrentStepStatus('pending');
-    // Don't reset aiStepSummary here as it might be set by loadClaimSpecificData
-    // If claimData is being reset to a *new* initial, that happens in loadClaimSpecificData
-    setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims })); // Keep totalClaims
-  }, []);
-
-
-  const loadClaimSpecificData = useCallback(async (claimFilePath: string) => {
-    setIsLoading(true);
-    resetFlowStates(); // Reset previous claim's flow state
-    setCurrentStep(0); // Go back to selection/start screen
-    try {
-      const claimRes = await fetch(claimFilePath);
-      if (!claimRes.ok) throw new Error(`Failed to load claim data from ${claimFilePath}.`);
-      
-      const claimJson: ClaimData = await claimRes.json();
-      setClaimData(claimJson);
-      setInitialClaimData(claimJson); // Save a copy for reset to this specific claim
-      
-      // Update dashboard processing count if a claim is loaded
-      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 0, rejectedClaims: 0 }));
-      setCurrentStep(0); // Ready to start processing this new claim
-      setAiStepSummary(`Claim "${availableClaims.find(c => c.path === claimFilePath)?.name || 'Selected Claim'}" loaded. Click "Start Processing This Claim" to begin.`);
-
-    } catch (error) {
-      console.error("Error loading claim-specific data:", error);
-      toast({ title: "Error", description: `Failed to load selected claim data. ${error instanceof Error ? error.message : ''}`, variant: "destructive" });
-      setCurrentStepStatus('error');
-      setAiStepSummary('Failed to load the selected claim. Please try another or check console.');
-      setClaimData(null);
-      setInitialClaimData(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [toast, resetFlowStates, availableClaims]);
 
   useEffect(() => {
     fetchCoreData();
@@ -178,12 +175,11 @@ export default function Home() {
   const handleReset = () => {
     setCurrentStep(0);
     resetFlowStates();
-    if (initialClaimData) { // If a specific claim was loaded, reset to its initial state
-      setClaimData(initialClaimData); 
+    if (initialClaimData) { 
+      setClaimData(JSON.parse(JSON.stringify(initialClaimData))); // Use deep copy to avoid mutation issues
     } else {
-      setClaimData(null); // Or clear if no specific claim was loaded initially
+      setClaimData(null); 
     }
-    // Reset dashboard specific to current claim (totalClaims remains)
     setDashboardMetrics(prev => ({...initialDashboardMetrics, totalClaims: prev.totalClaims, processingClaims: 0, validatedClaims: 0, rejectedClaims: 0}));
     toast({ title: "Process Reset", description: "Claim process has been reset for the current claim." });
      if (selectedClaimFile) {
@@ -232,14 +228,26 @@ export default function Home() {
 
         case 2: // Eligibility Check
           setAiStepSummary("Performing initial eligibility checks...");
-          const member = memberData.members.find(m => m.aadhaarNumber === claimData.claimantAadhaar && m.policyNumber === claimData.policyNumber);
+          const searchAadhaar = claimData.claimantAadhaar.trim();
+          const searchPolicyNumber = claimData.policyNumber.trim();
+
+          const member = memberData.members.find(m =>
+            m.aadhaarNumber.trim() === searchAadhaar &&
+            m.policyNumber.trim() === searchPolicyNumber
+          );
+
           if (member && member.policyStatus === 'Active') {
             setEligibilityCheckResult({ status: 'Eligible', message: `Policy ${member.policyNumber} is Active for ${member.name}. Premium paid on ${member.premiumPaidDate}.` });
             setAiStepSummary(`Policy holder ${member.name} is eligible. Policy status: Active.`);
             setCurrentStepStatus('completed');
           } else {
-            setEligibilityCheckResult({ status: 'Ineligible', message: `Policy/Member not found or policy is Inactive.` });
-            setAiStepSummary('Claimant is ineligible based on policy status or member data.');
+            let reason = "Policy/Member not found";
+            if (member && member.policyStatus !== 'Active') {
+              reason = `Policy found for ${member.name} (Aadhaar: ${member.aadhaarNumber}) but status is ${member.policyStatus}.`;
+            }
+            const debugMessage = `${reason}. Searched Aadhaar: '${searchAadhaar}', Policy: '${searchPolicyNumber}'.`;
+            setEligibilityCheckResult({ status: 'Ineligible', message: debugMessage });
+            setAiStepSummary(`Claimant is ineligible. ${debugMessage}`);
             setCurrentStepStatus('error'); 
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
           }
@@ -247,15 +255,12 @@ export default function Home() {
 
         case 3: // OCR + GenAI
           setAiStepSummary("Extracting data from documents using AI (simulated OCR)...");
-          // Use a deep copy of claimData for the AI flow to avoid direct mutation issues if any
           const currentClaimDataForOcr = JSON.parse(JSON.stringify(claimData));
           const ocrResult = await extractAndFillClaimData({
             claimDocumentDataUri: PLACEHOLDER_IMAGE_DATA_URI,
             currentClaimData: currentClaimDataForOcr,
           });
           setOcrOutput(ocrResult);
-          // Merge OCR results carefully: ocrResult might be partial or a full object
-          // Prefer values from ocrResult if they exist.
           setClaimData(prev => ({ ...prev!, ...ocrResult }));
           const newFieldsCount = Object.keys(ocrResult).filter(key => !(key in currentClaimDataForOcr) || currentClaimDataForOcr[key] !== ocrResult[key]).length;
           setAiStepSummary(`AI has extracted and potentially updated data. ${newFieldsCount} fields affected. Review extracted data below.`);
@@ -274,7 +279,7 @@ export default function Home() {
             if (consistencyResult.inconsistencies.some(inc => inc.toLowerCase().includes("critical") || inc.toLowerCase().includes("missing document"))) {
               setClaimData(prev => ({...prev!, missingInformation: consistencyResult.inconsistencies}));
               setCurrentStep(7); 
-              setIsLoading(false); // Set loading to false as we are jumping steps
+              setIsLoading(false); 
               return; 
             }
           } else {
@@ -364,12 +369,11 @@ export default function Home() {
          setIsLoading(false);
       }
     }
-  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult, resetFlowStates, availableClaims]);
+  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult]);
 
   const renderStepContent = () => {
-    if (isLoading && !claimData && currentStep === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Application Data...</p></div>;
+    if (isLoading && !claimData && currentStep === 0 && availableClaims.length === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Application Data...</p></div>;
     
-    // Common buttons
     const commonActionButton = (text: string = "Process This Step") => ({
       text: text,
       onClick: handleProcessStep,
@@ -409,6 +413,7 @@ export default function Home() {
                   <Button size="lg" onClick={() => setIsClaimSelectionModalOpen(true)} disabled={isLoading || availableClaims.length === 0}>
                      <List className="mr-2 h-5 w-5" /> Select Claim to Process
                   </Button>
+                   {availableClaims.length === 0 && !isLoading && <p className="text-sm text-muted-foreground mt-2">Loading claim list or no claims found...</p>}
                 </>
               )}
             </CardContent>
@@ -477,7 +482,7 @@ export default function Home() {
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.blue}
              actionButton={
               currentStepStatus === 'completed' ? nextStepButton() : 
-              (medicalVerificationResult?.isEligible === false ?  // Check specific boolean false
+              (medicalVerificationResult?.isEligible === false ? 
                 {text: "Process Blocked (Medically Ineligible)", onClick:handleReset, disabled:isLoading, variant: "destructive"} : 
                 commonActionButton())
             }
@@ -597,4 +602,3 @@ export default function Home() {
     </div>
   );
 }
-
