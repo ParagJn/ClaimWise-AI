@@ -113,7 +113,8 @@ export default function Home() {
     setDecisionSummary(null);
     setMissingInfoEmail(null);
     setCurrentStepStatus('pending');
-    setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims })); // Keep totalClaims
+    // totalClaims is preserved from its loaded state, others are reset for the current claim cycle.
+    setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims }));
   }, []);
   
   const loadClaimSpecificData = useCallback(async (claimFilePath: string) => {
@@ -126,9 +127,10 @@ export default function Home() {
       
       const claimJson: ClaimData = await claimRes.json();
       setClaimData(claimJson);
-      setInitialClaimData(claimJson); 
+      setInitialClaimData(JSON.parse(JSON.stringify(claimJson))); // Deep copy for initial state
       
-      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 0, rejectedClaims: 0 }));
+      // Reset per-claim metrics, preserve totalClaims
+      setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims }));
       setCurrentStep(0); 
       setAiStepSummary(`Claim "${availableClaims.find(c => c.path === claimFilePath)?.name || 'Selected Claim'}" loaded. Click "Start Processing This Claim" to begin.`);
 
@@ -166,13 +168,10 @@ export default function Home() {
       setAvailableClaims(claimsList);
       setDashboardMetrics(prev => ({ ...prev, totalClaims: claimsList.length }));
 
-      // Defensive check for memberData
       if (!fetchedMemberData || !Array.isArray(fetchedMemberData.members)) {
         console.error("Member data is not in the expected format:", fetchedMemberData);
         toast({ title: "Data Error", description: "Member data is not loaded correctly. Please check the console.", variant: "destructive" });
       }
-
-
     } catch (error) {
       console.error("Error loading core data:", error);
       toast({ title: "Error", description: "Failed to load core application data. Please try reloading.", variant: "destructive" });
@@ -191,24 +190,37 @@ export default function Home() {
 
   const handleReset = () => {
     setCurrentStep(0);
-    resetFlowStates();
+    resetFlowStates(); // Resets flow states and relevant dashboard metrics (processing, validated, rejected)
     if (initialClaimData) { 
       setClaimData(JSON.parse(JSON.stringify(initialClaimData))); 
+       setAiStepSummary(`Claim "${selectedClaimFile?.name || 'Selected Claim'}" reloaded. Click "Start Processing This Claim" to begin.`);
     } else {
       setClaimData(null); 
+      setSelectedClaimFile(null);
+      setAiStepSummary('Select a claim to begin processing.');
     }
-    setDashboardMetrics(prev => ({...initialDashboardMetrics, totalClaims: prev.totalClaims, processingClaims: 0, validatedClaims: 0, rejectedClaims: 0}));
-    toast({ title: "Process Reset", description: "Claim process has been reset for the current claim." });
-     if (selectedClaimFile) {
-        setAiStepSummary(`Claim "${selectedClaimFile.name}" reloaded. Click "Start Processing This Claim" to begin.`);
-    } else {
-        setAiStepSummary('Select a claim to begin processing.');
-    }
+    // Dashboard metrics are reset by resetFlowStates, totalClaims is preserved.
+    toast({ title: "Process Reset", description: "Current claim process has been reset." });
   };
+
+  const handleProcessAnotherClaim = () => {
+    setCurrentStep(0);
+    resetFlowStates(); // Resets flow states and dashboard metrics like processing, validated, rejected to 0
+    setClaimData(null);
+    setInitialClaimData(null);
+    setSelectedClaimFile(null);
+    
+    // Dashboard metrics (processing, validated, rejected) are reset by resetFlowStates. totalClaims is preserved.
+    
+    setAiStepSummary('Previous claim processed. Select a new claim to begin processing.');
+    toast({ title: "Ready for Next Claim", description: "Please select a new claim to process." });
+    setIsClaimSelectionModalOpen(true);
+  };
+
 
   const handleSelectClaimFile = (file: AvailableClaimFile) => {
     setSelectedClaimFile(file);
-    loadClaimSpecificData(file.path);
+    loadClaimSpecificData(file.path); // This will call resetFlowStates
     setIsClaimSelectionModalOpen(false);
   };
 
@@ -239,6 +251,7 @@ export default function Home() {
     
     setIsLoading(true);
     setCurrentStepStatus('in-progress');
+    // Set processing to 1, keep existing total, and reset validated/rejected for this new attempt
     setDashboardMetrics(prev => ({ ...prev, processingClaims: 1, validatedClaims: 0, rejectedClaims: 0 }));
     
     try {
@@ -271,9 +284,9 @@ export default function Home() {
             setAiStepSummary(`Policy holder ${member.name.trim()} is eligible. Policy status: Active.`);
             setCurrentStepStatus('completed');
           } else {
-            let reason = `Policy/Member not found for Aadhaar: '${searchAadhaar}', Policy: '${searchPolicyNumber}'.`;
+            let reason = `Policy/Member not found. Searched Aadhaar: '${searchAadhaar}', Policy: '${searchPolicyNumber}'.`;
             if (member && member.policyStatus !== 'Active') {
-              reason = `Policy found for ${member.name.trim()} (Aadhaar: ${member.aadhaarNumber.trim()}) but status is ${member.policyStatus}.`;
+              reason = `Policy found for ${member.name.trim()} (Aadhaar: ${member.aadhaarNumber.trim()}, Policy: ${member.policyNumber.trim()}) but status is ${member.policyStatus}.`;
             }
             setEligibilityCheckResult({ status: 'Ineligible', message: reason });
             setAiStepSummary(`Claimant is ineligible. ${reason}`);
@@ -335,7 +348,7 @@ export default function Home() {
           }
           setMedicalVerificationResult({ status: isMedicallyEligible ? 'Eligible' : 'Ineligible', message: medicalVerificationMessage, isEligible: isMedicallyEligible });
           setAiStepSummary(medicalVerificationMessage);
-          setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error'); // 'error' if not eligible to allow override
+          setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error');
           if (!isMedicallyEligible) {
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
           }
@@ -347,13 +360,12 @@ export default function Home() {
              setCurrentStepStatus('error');
              break;
           }
-          // Allow proceeding even if previous steps had errors (if overridden)
-          const wasEligibilityOverridden = eligibilityCheckResult.status === 'Ineligible' && decisionSummary === null; // Check if override happened for eligibility
+          
+          const wasEligibilityOverridden = eligibilityCheckResult.status === 'Ineligible' && (medicalVerificationResult?.isEligible || decisionSummary === null); // Check if override happened for eligibility
           const wasMedicalOverridden = medicalVerificationResult.isEligible === false && decisionSummary === null; // Check if override happened for medical
 
           setAiStepSummary("Generating final decision summary with AI...");
           
-          // Determine eligibility based on current step outcomes OR if an override occurred
           const isOverallEligible = (eligibilityCheckResult.status === 'Eligible' || wasEligibilityOverridden) && 
                                     (medicalVerificationResult.isEligible || wasMedicalOverridden);
 
@@ -370,9 +382,9 @@ export default function Home() {
           setAiStepSummary(<>Decision: <strong>{summaryResult.decision}</strong>. {summaryResult.summary}</>);
           setCurrentStepStatus('completed');
           if (summaryResult.decision === 'Approved') {
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 1, rejectedClaims: prev.rejectedClaims > 0 && !isOverallEligible ? prev.rejectedClaims : 0  }));
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 1, rejectedClaims: 0  }));
           } else {
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1, validatedClaims: prev.validatedClaims > 0 && isOverallEligible ? prev.validatedClaims : 0 }));
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1, validatedClaims: 0 }));
           }
           break;
 
@@ -400,7 +412,7 @@ export default function Home() {
       toast({ title: `Error in Step ${currentStep}`, description: error.message || "An unexpected error occurred.", variant: "destructive" });
       setCurrentStepStatus('error');
       setAiStepSummary(`An error occurred: ${error.message}. Check console for details.`);
-      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
+      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); // Reset processing on error
     } finally {
       if (!(currentStep === 4 && claimData?.missingInformation?.length && claimData.missingInformation.length > 0)) {
          setIsLoading(false);
@@ -421,7 +433,7 @@ export default function Home() {
     const nextStepButton = (text: string = "Proceed to Next Step") => ({
         text: text,
         onClick: proceedToNextStep,
-        disabled: isLoading || (currentStepStatus !== 'completed' && currentStepStatus !== 'error'), // Allow proceeding from error if override is possible
+        disabled: isLoading || (currentStepStatus !== 'completed' && currentStepStatus !== 'error' && currentStepStatus !== 'info'), 
     });
 
     switch (currentStep) {
@@ -479,10 +491,14 @@ export default function Home() {
                   onClick: () => handleShowOverrideModal(
                     "Confirm Override: Eligibility",
                     `${eligibilityCheckResult.message}. Do you want to override this and continue processing?`,
-                    () => proceedToNextStep()
+                    () => {
+                      // Manually update relevant dashboard metrics if overriding a rejection
+                      setDashboardMetrics(prev => ({ ...prev, rejectedClaims: 0 })); // Assume it's no longer rejected for this cycle
+                      proceedToNextStep();
+                    }
                   ),
                   disabled: isLoading,
-                  variant: "destructive"
+                  variant: "destructive" as const
                 } :
                 commonActionButton())
             }
@@ -534,17 +550,20 @@ export default function Home() {
                   onClick: () => handleShowOverrideModal(
                     "Confirm Override: Medical Verification",
                     `${medicalVerificationResult.message}. Do you want to override this and continue processing?`,
-                    () => proceedToNextStep()
+                    () => {
+                       setDashboardMetrics(prev => ({ ...prev, rejectedClaims: 0 }));
+                       proceedToNextStep();
+                    }
                   ),
                   disabled: isLoading,
-                  variant: "destructive"
+                  variant: "destructive" as const
                 } :
                 commonActionButton())
             }
           >
             {medicalVerificationResult && (
               <p className={`font-semibold ${medicalVerificationResult.isEligible ? 'text-google-green' : 'text-google-red'}`}>
-                Status: {medicalVerificationResult.status} - {medicalVerificationResult.message}
+                Status: {medicalVerificationResult.isEligible ? 'Eligible' : 'Ineligible'} - {medicalVerificationResult.message}
               </p>
             )}
              <ClaimDetailsView data={{ medicalCodesUsed: claimData?.medicalCodes, rulesSnapshot: medicalCodes?.eligibleCodes.slice(0,2).concat(medicalCodes.ineligibleCodes.slice(0,1)) }} title="Data Used for Verification" />
@@ -556,7 +575,15 @@ export default function Home() {
             stepNumber={6} title="Final Summary & Decision" status={currentStepStatus}
             aiSummary={aiStepSummary}
             borderColorClass={decisionSummary?.decision === 'Approved' ? GOOGLE_COLORS.green : (decisionSummary?.decision === 'Rejected' ? GOOGLE_COLORS.red : GOOGLE_COLORS.muted)}
-            actionButton={currentStepStatus === 'completed' ? { text: "Process Complete. Reset Current Claim.", onClick: handleReset } : commonActionButton()}
+            actionButton={
+              currentStepStatus === 'completed' ? 
+              { 
+                text: "Process Another Claim", 
+                onClick: handleProcessAnotherClaim,
+                disabled: isLoading 
+              } : 
+              commonActionButton()
+            }
           >
             {decisionSummary && claimData && (
               <>
