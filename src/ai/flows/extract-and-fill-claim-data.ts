@@ -56,6 +56,7 @@ const prompt = ai.definePrompt({
 
   Output:
   Return the auto-filled claim data as a JSON string. Ensure the string is valid JSON.
+  If no data can be extracted or there is an issue, return an empty JSON object as a string (e.g., "{}"). DO NOT RETURN NULL.
   `,
 });
 
