@@ -113,8 +113,8 @@ export default function Home() {
     setDecisionSummary(null);
     setMissingInfoEmail(null);
     setCurrentStepStatus('pending');
-    // totalClaims is preserved from its loaded state, others are reset for the current claim cycle.
-    setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims }));
+    // Only reset processingClaims, keep validated and rejected counts for accumulation
+    setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); 
   }, []);
   
   const loadClaimSpecificData = useCallback(async (claimFilePath: string) => {
@@ -127,10 +127,8 @@ export default function Home() {
       
       const claimJson: ClaimData = await claimRes.json();
       setClaimData(claimJson);
-      setInitialClaimData(JSON.parse(JSON.stringify(claimJson))); // Deep copy for initial state
+      setInitialClaimData(JSON.parse(JSON.stringify(claimJson))); 
       
-      // Reset per-claim metrics, preserve totalClaims
-      setDashboardMetrics(prev => ({ ...initialDashboardMetrics, totalClaims: prev.totalClaims }));
       setCurrentStep(0); 
       setAiStepSummary(`Claim "${availableClaims.find(c => c.path === claimFilePath)?.name || 'Selected Claim'}" loaded. Click "Start Processing This Claim" to begin.`);
 
@@ -188,30 +186,35 @@ export default function Home() {
   }, [fetchCoreData]);
 
 
-  const handleReset = () => {
+  const handleReset = () => { // Admin Panel Reset
     setCurrentStep(0);
-    resetFlowStates(); // Resets flow states and relevant dashboard metrics (processing, validated, rejected)
-    if (initialClaimData) { 
+    resetFlowStates(); // Resets flow states and sets processingClaims to 0
+
+    // Explicitly reset validated and rejected claims for a full admin reset, preserve totalClaims
+    setDashboardMetrics(prev => ({ 
+      ...initialDashboardMetrics, 
+      totalClaims: prev.totalClaims, 
+    }));
+
+    if (initialClaimData && selectedClaimFile) { // Only reload if a claim was truly selected and processed
       setClaimData(JSON.parse(JSON.stringify(initialClaimData))); 
-       setAiStepSummary(`Claim "${selectedClaimFile?.name || 'Selected Claim'}" reloaded. Click "Start Processing This Claim" to begin.`);
-    } else {
+      setAiStepSummary(`Claim "${selectedClaimFile.name}" reloaded. Click "Start Processing This Claim" to begin.`);
+    } else { // If no claim was fully loaded or if it's the initial state
       setClaimData(null); 
+      setInitialClaimData(null);
       setSelectedClaimFile(null);
       setAiStepSummary('Select a claim to begin processing.');
     }
-    // Dashboard metrics are reset by resetFlowStates, totalClaims is preserved.
-    toast({ title: "Process Reset", description: "Current claim process has been reset." });
+    toast({ title: "Process Fully Reset", description: "Current claim process and dashboard counts (validated/rejected) have been reset." });
   };
 
   const handleProcessAnotherClaim = () => {
     setCurrentStep(0);
-    resetFlowStates(); // Resets flow states and dashboard metrics like processing, validated, rejected to 0
+    resetFlowStates(); // Resets flow states and sets processingClaims to 0. Validated/Rejected are preserved by this function.
     setClaimData(null);
     setInitialClaimData(null);
     setSelectedClaimFile(null);
-    
-    // Dashboard metrics (processing, validated, rejected) are reset by resetFlowStates. totalClaims is preserved.
-    
+        
     setAiStepSummary('Previous claim processed. Select a new claim to begin processing.');
     toast({ title: "Ready for Next Claim", description: "Please select a new claim to process." });
     setIsClaimSelectionModalOpen(true);
@@ -220,7 +223,7 @@ export default function Home() {
 
   const handleSelectClaimFile = (file: AvailableClaimFile) => {
     setSelectedClaimFile(file);
-    loadClaimSpecificData(file.path); // This will call resetFlowStates
+    loadClaimSpecificData(file.path); 
     setIsClaimSelectionModalOpen(false);
   };
 
@@ -251,8 +254,7 @@ export default function Home() {
     
     setIsLoading(true);
     setCurrentStepStatus('in-progress');
-    // Set processing to 1, keep existing total, and reset validated/rejected for this new attempt
-    setDashboardMetrics(prev => ({ ...prev, processingClaims: 1, validatedClaims: 0, rejectedClaims: 0 }));
+    setDashboardMetrics(prev => ({ ...prev, processingClaims: 1 }));
     
     try {
       switch (currentStep) {
@@ -270,7 +272,7 @@ export default function Home() {
             setEligibilityCheckResult({ status: 'Ineligible', message: 'Member data is not available or empty. Cannot perform eligibility check.' });
             setAiStepSummary('Member data is missing or empty. Please check data files and ensure member_data.json is correctly populated and loaded.');
             setCurrentStepStatus('error');
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
+            // Do not update rejectedClaims here, Step 6 handles final decision
             break;
           }
           
@@ -291,7 +293,6 @@ export default function Home() {
             setEligibilityCheckResult({ status: 'Ineligible', message: reason });
             setAiStepSummary(`Claimant is ineligible. ${reason}`);
             setCurrentStepStatus('error'); 
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
           }
           break;
 
@@ -322,6 +323,7 @@ export default function Home() {
               setClaimData(prev => ({...prev!, missingInformation: consistencyResult.inconsistencies}));
               setCurrentStep(7); 
               setIsLoading(false); 
+              setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); // Moved to step 7 explicitly
               return; 
             }
           } else {
@@ -349,25 +351,38 @@ export default function Home() {
           setMedicalVerificationResult({ status: isMedicallyEligible ? 'Eligible' : 'Ineligible', message: medicalVerificationMessage, isEligible: isMedicallyEligible });
           setAiStepSummary(medicalVerificationMessage);
           setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error');
-          if (!isMedicallyEligible) {
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
-          }
+          // Do not update rejectedClaims here
           break;
 
         case 6: // Summary & Decision
           if (!medicalVerificationResult || !eligibilityCheckResult) { 
              setAiStepSummary("Eligibility and Medical verification must be completed first.");
              setCurrentStepStatus('error');
+             // Ensure processingClaims is set to 0 if we error out here before decision
+             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
              break;
           }
           
-          const wasEligibilityOverridden = eligibilityCheckResult.status === 'Ineligible' && (medicalVerificationResult?.isEligible || decisionSummary === null); // Check if override happened for eligibility
-          const wasMedicalOverridden = medicalVerificationResult.isEligible === false && decisionSummary === null; // Check if override happened for medical
+          const wasEligibilityOverridden = eligibilityCheckResult.status === 'Ineligible' && medicalVerificationResult?.isEligible === true; 
+          const wasMedicalOverridden = medicalVerificationResult?.isEligible === false && eligibilityCheckResult.status === 'Eligible'; 
+          const bothOverridden = eligibilityCheckResult.status === 'Ineligible' && medicalVerificationResult?.isEligible === false;
+
 
           setAiStepSummary("Generating final decision summary with AI...");
           
-          const isOverallEligible = (eligibilityCheckResult.status === 'Eligible' || wasEligibilityOverridden) && 
-                                    (medicalVerificationResult.isEligible || wasMedicalOverridden);
+          let isOverallEligible = (eligibilityCheckResult.status === 'Eligible' && medicalVerificationResult.isEligible);
+          // Check if an override occurred. If an override button was clicked, the corresponding status would have been effectively 'Eligible' for this check.
+          // The actual results are in eligibilityCheckResult and medicalVerificationResult
+          // If overrideModalConfig.onConfirm was called, it called proceedToNextStep. The results are still the original ones.
+          // We need to track if override happened. A simple way is to see if proceedToNextStep was called despite error.
+          // Let's re-evaluate isOverallEligible based on current component state.
+
+          const userOverrodeEligibility = eligibilityCheckResult.status === 'Ineligible' && (overrideModalConfig?.title.includes("Eligibility"));
+          const userOverrodeMedical = medicalVerificationResult.isEligible === false && (overrideModalConfig?.title.includes("Medical"));
+
+          isOverallEligible = (eligibilityCheckResult.status === 'Eligible' || userOverrodeEligibility) && 
+                              (medicalVerificationResult.isEligible || userOverrodeMedical);
+
 
           const settlementAmount = isOverallEligible ? claimData.claimedAmount * 0.9 : 0; 
           setClaimData(prev => ({ ...prev!, settlementAmount }));
@@ -382,10 +397,11 @@ export default function Home() {
           setAiStepSummary(<>Decision: <strong>{summaryResult.decision}</strong>. {summaryResult.summary}</>);
           setCurrentStepStatus('completed');
           if (summaryResult.decision === 'Approved') {
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 1, rejectedClaims: 0  }));
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: prev.validatedClaims + 1 }));
           } else {
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1, validatedClaims: 0 }));
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: prev.rejectedClaims + 1 }));
           }
+          setOverrideModalConfig(null); // Clear override state after decision
           break;
 
         case 7: // Missing Info Path
@@ -406,19 +422,24 @@ export default function Home() {
         default:
           setAiStepSummary("Unknown step or process not started.");
           setCurrentStepStatus('pending');
+          setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
       }
     } catch (error: any) {
       console.error(`Error in step ${currentStep}:`, error);
       toast({ title: `Error in Step ${currentStep}`, description: error.message || "An unexpected error occurred.", variant: "destructive" });
       setCurrentStepStatus('error');
       setAiStepSummary(`An error occurred: ${error.message}. Check console for details.`);
-      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); // Reset processing on error
+      setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 })); 
     } finally {
-      if (!(currentStep === 4 && claimData?.missingInformation?.length && claimData.missingInformation.length > 0)) {
+      if (!(currentStep === 4 && claimData?.missingInformation?.length && claimData.missingInformation.length > 0 && currentStepStatus !== 'completed')) {
          setIsLoading(false);
       }
+      // Reset override config if the step is completed or errored out without override path.
+      if (currentStepStatus === 'completed' || (currentStepStatus === 'error' && !(currentStep === 2 || currentStep === 5))) {
+        setOverrideModalConfig(null);
+      }
     }
-  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult, decisionSummary]);
+  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult, overrideModalConfig, availableClaims, resetFlowStates]);
 
   const renderStepContent = () => {
     if (isLoading && !claimData && currentStep === 0 && availableClaims.length === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Application Data...</p></div>;
@@ -433,7 +454,7 @@ export default function Home() {
     const nextStepButton = (text: string = "Proceed to Next Step") => ({
         text: text,
         onClick: proceedToNextStep,
-        disabled: isLoading || (currentStepStatus !== 'completed' && currentStepStatus !== 'error' && currentStepStatus !== 'info'), 
+        disabled: isLoading || (currentStepStatus !== 'completed' && !(currentStepStatus === 'error' && (currentStep === 2 || currentStep === 5)) && currentStepStatus !== 'info'),
     });
 
     switch (currentStep) {
@@ -492,13 +513,11 @@ export default function Home() {
                     "Confirm Override: Eligibility",
                     `${eligibilityCheckResult.message}. Do you want to override this and continue processing?`,
                     () => {
-                      // Manually update relevant dashboard metrics if overriding a rejection
-                      setDashboardMetrics(prev => ({ ...prev, rejectedClaims: 0 })); // Assume it's no longer rejected for this cycle
                       proceedToNextStep();
                     }
                   ),
                   disabled: isLoading,
-                  variant: "destructive" as const
+                  variant: "destructive" as const // Cast for Button variant prop
                 } :
                 commonActionButton())
             }
@@ -551,12 +570,11 @@ export default function Home() {
                     "Confirm Override: Medical Verification",
                     `${medicalVerificationResult.message}. Do you want to override this and continue processing?`,
                     () => {
-                       setDashboardMetrics(prev => ({ ...prev, rejectedClaims: 0 }));
                        proceedToNextStep();
                     }
                   ),
                   disabled: isLoading,
-                  variant: "destructive" as const
+                  variant: "destructive" as const // Cast for Button variant prop
                 } :
                 commonActionButton())
             }
@@ -613,6 +631,8 @@ export default function Home() {
                     setCurrentStepStatus('pending');
                     setAiStepSummary('Simulated information provided. Retrying consistency check...');
                     setIsLoading(false); 
+                    // Ensure processingClaims is correctly set when moving back
+                    setDashboardMetrics(prev => ({ ...prev, processingClaims: 0 }));
                 },
                 disabled: isLoading || !claimData,
                 loading: isLoading && currentStepStatus === 'in-progress',
@@ -686,7 +706,7 @@ export default function Home() {
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="sm:justify-end">
-              <Button variant="outline" onClick={() => setIsOverrideModalOpen(false)}>
+              <Button variant="outline" onClick={() => {setIsOverrideModalOpen(false); setOverrideModalConfig(null);}}>
                 Cancel
               </Button>
               <Button
@@ -695,6 +715,7 @@ export default function Home() {
                     overrideModalConfig.onConfirm();
                   }
                   setIsOverrideModalOpen(false);
+                  // setOverrideModalConfig(null); // Cleared in onConfirm or finally block
                 }}
               >
                 Yes, Continue Processing
