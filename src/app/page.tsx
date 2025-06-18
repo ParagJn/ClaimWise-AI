@@ -98,6 +98,13 @@ export default function Home() {
 
   const [dashboardMetrics, setDashboardMetrics] = useState(initialDashboardMetrics);
 
+  const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
+  const [overrideModalConfig, setOverrideModalConfig] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
   const resetFlowStates = useCallback(() => {
     setOcrOutput(null);
     setInconsistencies(null);
@@ -150,11 +157,21 @@ export default function Home() {
       ]);
       if (!memberRes.ok || !medicalRes.ok || !availableClaimsRes.ok) throw new Error("Failed to load core application data.");
       
-      setMemberData(await memberRes.json());
-      setMedicalCodes(await medicalRes.json());
+      const fetchedMemberData: MemberData = await memberRes.json();
+      const fetchedMedicalCodes: MedicalCodesData = await medicalRes.json();
       const claimsList: AvailableClaimFile[] = await availableClaimsRes.json();
+      
+      setMemberData(fetchedMemberData);
+      setMedicalCodes(fetchedMedicalCodes);
       setAvailableClaims(claimsList);
       setDashboardMetrics(prev => ({ ...prev, totalClaims: claimsList.length }));
+
+      // Defensive check for memberData
+      if (!fetchedMemberData || !Array.isArray(fetchedMemberData.members)) {
+        console.error("Member data is not in the expected format:", fetchedMemberData);
+        toast({ title: "Data Error", description: "Member data is not loaded correctly. Please check the console.", variant: "destructive" });
+      }
+
 
     } catch (error) {
       console.error("Error loading core data:", error);
@@ -176,7 +193,7 @@ export default function Home() {
     setCurrentStep(0);
     resetFlowStates();
     if (initialClaimData) { 
-      setClaimData(JSON.parse(JSON.stringify(initialClaimData))); // Use deep copy to avoid mutation issues
+      setClaimData(JSON.parse(JSON.stringify(initialClaimData))); 
     } else {
       setClaimData(null); 
     }
@@ -206,6 +223,11 @@ export default function Home() {
       setCurrentStepStatus('pending');
       setAiStepSummary('Preparing for the next step...');
     }
+  };
+
+  const handleShowOverrideModal = (title: string, message: string, onConfirmAction: () => void) => {
+    setOverrideModalConfig({ title, message, onConfirm: onConfirmAction });
+    setIsOverrideModalOpen(true);
   };
 
   const handleProcessStep = useCallback(async () => {
@@ -238,26 +260,23 @@ export default function Home() {
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
             break;
           }
-
+          
           const member = memberData.members.find(m =>
             m.aadhaarNumber.trim() === searchAadhaar &&
             m.policyNumber.trim() === searchPolicyNumber
           );
 
           if (member && member.policyStatus === 'Active') {
-            setEligibilityCheckResult({ status: 'Eligible', message: `Policy ${member.policyNumber.trim()} is Active for ${member.name}. Premium paid on ${member.premiumPaidDate}.` });
-            setAiStepSummary(`Policy holder ${member.name} is eligible. Policy status: Active.`);
+            setEligibilityCheckResult({ status: 'Eligible', message: `Policy ${member.policyNumber.trim()} is Active for ${member.name.trim()}. Premium paid on ${member.premiumPaidDate}.` });
+            setAiStepSummary(`Policy holder ${member.name.trim()} is eligible. Policy status: Active.`);
             setCurrentStepStatus('completed');
           } else {
-            let reason = "Policy/Member not found";
+            let reason = `Policy/Member not found for Aadhaar: '${searchAadhaar}', Policy: '${searchPolicyNumber}'.`;
             if (member && member.policyStatus !== 'Active') {
-              reason = `Policy found for ${member.name} (Aadhaar: ${member.aadhaarNumber.trim()}) but status is ${member.policyStatus}.`;
-            } else if (!member) {
-              // Reason remains "Policy/Member not found"
+              reason = `Policy found for ${member.name.trim()} (Aadhaar: ${member.aadhaarNumber.trim()}) but status is ${member.policyStatus}.`;
             }
-            const debugMessage = `${reason}. Searched Aadhaar: '${searchAadhaar}', Policy: '${searchPolicyNumber}'.`;
-            setEligibilityCheckResult({ status: 'Ineligible', message: debugMessage });
-            setAiStepSummary(`Claimant is ineligible. ${debugMessage}`);
+            setEligibilityCheckResult({ status: 'Ineligible', message: reason });
+            setAiStepSummary(`Claimant is ineligible. ${reason}`);
             setCurrentStepStatus('error'); 
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
           }
@@ -316,7 +335,7 @@ export default function Home() {
           }
           setMedicalVerificationResult({ status: isMedicallyEligible ? 'Eligible' : 'Ineligible', message: medicalVerificationMessage, isEligible: isMedicallyEligible });
           setAiStepSummary(medicalVerificationMessage);
-          setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error');
+          setCurrentStepStatus(isMedicallyEligible ? 'completed' : 'error'); // 'error' if not eligible to allow override
           if (!isMedicallyEligible) {
             setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
           }
@@ -328,8 +347,16 @@ export default function Home() {
              setCurrentStepStatus('error');
              break;
           }
+          // Allow proceeding even if previous steps had errors (if overridden)
+          const wasEligibilityOverridden = eligibilityCheckResult.status === 'Ineligible' && decisionSummary === null; // Check if override happened for eligibility
+          const wasMedicalOverridden = medicalVerificationResult.isEligible === false && decisionSummary === null; // Check if override happened for medical
+
           setAiStepSummary("Generating final decision summary with AI...");
-          const isOverallEligible = medicalVerificationResult.isEligible && eligibilityCheckResult.status === 'Eligible';
+          
+          // Determine eligibility based on current step outcomes OR if an override occurred
+          const isOverallEligible = (eligibilityCheckResult.status === 'Eligible' || wasEligibilityOverridden) && 
+                                    (medicalVerificationResult.isEligible || wasMedicalOverridden);
+
           const settlementAmount = isOverallEligible ? claimData.claimedAmount * 0.9 : 0; 
           setClaimData(prev => ({ ...prev!, settlementAmount }));
 
@@ -337,15 +364,15 @@ export default function Home() {
             claimAmount: claimData.claimedAmount,
             settlementAmount: settlementAmount,
             isEligible: isOverallEligible,
-            reason: `${medicalVerificationResult.message} | ${eligibilityCheckResult.message}`,
+            reason: `Eligibility: ${eligibilityCheckResult.message}. Medical Verification: ${medicalVerificationResult.message}. Overrides applied if applicable.`,
           });
           setDecisionSummary(summaryResult);
           setAiStepSummary(<>Decision: <strong>{summaryResult.decision}</strong>. {summaryResult.summary}</>);
           setCurrentStepStatus('completed');
           if (summaryResult.decision === 'Approved') {
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 1 }));
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, validatedClaims: 1, rejectedClaims: prev.rejectedClaims > 0 && !isOverallEligible ? prev.rejectedClaims : 0  }));
           } else {
-            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1 }));
+            setDashboardMetrics(prev => ({ ...prev, processingClaims: 0, rejectedClaims: 1, validatedClaims: prev.validatedClaims > 0 && isOverallEligible ? prev.validatedClaims : 0 }));
           }
           break;
 
@@ -379,7 +406,7 @@ export default function Home() {
          setIsLoading(false);
       }
     }
-  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult]);
+  }, [currentStep, claimData, memberData, medicalCodes, toast, ocrOutput, eligibilityCheckResult, medicalVerificationResult, decisionSummary]);
 
   const renderStepContent = () => {
     if (isLoading && !claimData && currentStep === 0 && availableClaims.length === 0) return <div className="flex justify-center items-center h-64"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-4 text-lg">Loading Application Data...</p></div>;
@@ -394,7 +421,7 @@ export default function Home() {
     const nextStepButton = (text: string = "Proceed to Next Step") => ({
         text: text,
         onClick: proceedToNextStep,
-        disabled: isLoading || currentStepStatus !== 'completed',
+        disabled: isLoading || (currentStepStatus !== 'completed' && currentStepStatus !== 'error'), // Allow proceeding from error if override is possible
     });
 
     switch (currentStep) {
@@ -445,9 +472,18 @@ export default function Home() {
             stepNumber={2} title="Policy & Member Eligibility Check" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.yellow}
             actionButton={
-              currentStepStatus === 'completed' ? nextStepButton() : 
-              (eligibilityCheckResult?.status === 'Ineligible' ? 
-                {text: "Process Blocked (Ineligible)", onClick: handleReset, disabled:isLoading, variant: "destructive"} : 
+              currentStepStatus === 'completed' ? nextStepButton() :
+              (eligibilityCheckResult?.status === 'Ineligible' && currentStepStatus === 'error' ?
+                {
+                  text: "Override Eligibility Issue?",
+                  onClick: () => handleShowOverrideModal(
+                    "Confirm Override: Eligibility",
+                    `${eligibilityCheckResult.message}. Do you want to override this and continue processing?`,
+                    () => proceedToNextStep()
+                  ),
+                  disabled: isLoading,
+                  variant: "destructive"
+                } :
                 commonActionButton())
             }
           >
@@ -485,15 +521,24 @@ export default function Home() {
             )}
           </ClaimStepCard>
         );
-      case 5: // Eligibility Verification
+      case 5: // Medical Eligibility Verification
         return (
           <ClaimStepCard
             stepNumber={5} title="Medical Eligibility Verification" status={currentStepStatus}
             aiSummary={aiStepSummary} borderColorClass={GOOGLE_COLORS.blue}
-             actionButton={
-              currentStepStatus === 'completed' ? nextStepButton() : 
-              (medicalVerificationResult?.isEligible === false ? 
-                {text: "Process Blocked (Medically Ineligible)", onClick:handleReset, disabled:isLoading, variant: "destructive"} : 
+            actionButton={
+              currentStepStatus === 'completed' ? nextStepButton() :
+              (medicalVerificationResult?.isEligible === false && currentStepStatus === 'error' ?
+                {
+                  text: "Override Medical Ineligibility?",
+                  onClick: () => handleShowOverrideModal(
+                    "Confirm Override: Medical Verification",
+                    `${medicalVerificationResult.message}. Do you want to override this and continue processing?`,
+                    () => proceedToNextStep()
+                  ),
+                  disabled: isLoading,
+                  variant: "destructive"
+                } :
                 commonActionButton())
             }
           >
@@ -605,6 +650,32 @@ export default function Home() {
           </DialogContent>
         </Dialog>
 
+        <Dialog open={isOverrideModalOpen} onOpenChange={setIsOverrideModalOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{overrideModalConfig?.title}</DialogTitle>
+              <DialogDescription>
+                {overrideModalConfig?.message}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="sm:justify-end">
+              <Button variant="outline" onClick={() => setIsOverrideModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (overrideModalConfig) {
+                    overrideModalConfig.onConfirm();
+                  }
+                  setIsOverrideModalOpen(false);
+                }}
+              >
+                Yes, Continue Processing
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
       </main>
       <footer className="text-center py-4 text-sm text-muted-foreground border-t">
         ClaimWise AI &copy; {new Date().getFullYear()} - Powered by Firebase Studio & Genkit
@@ -612,4 +683,4 @@ export default function Home() {
     </div>
   );
 }
-
+      
