@@ -45,7 +45,7 @@ const ClaimStepCard: React.FC<ClaimStepCardProps> = ({
           {statusIcons[status]}
         </div>
         <CardDescription className="text-sm">
-          Current status of this validation step.
+          This is the simulation of the {title}. In the MVP, this may be automated directly showing the result. 
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
