@@ -1,3 +1,4 @@
+
 'use server';
 /**
  * @fileOverview This file defines a Genkit flow for extracting data from claim documents using OCR and GenAI,
@@ -21,6 +22,7 @@ const ExtractAndFillClaimDataInputSchema = z.object({
 });
 export type ExtractAndFillClaimDataInput = z.infer<typeof ExtractAndFillClaimDataInputSchema>;
 
+// This remains the schema for the FLOW's output and the EXPORTED FUNCTION's output.
 const ExtractAndFillClaimDataOutputSchema = z.record(z.any()).describe('The auto-filled claim data in JSON format.');
 export type ExtractAndFillClaimDataOutput = z.infer<typeof ExtractAndFillClaimDataOutputSchema>;
 
@@ -28,10 +30,14 @@ export async function extractAndFillClaimData(input: ExtractAndFillClaimDataInpu
   return extractAndFillClaimDataFlow(input);
 }
 
+// Define a schema for the raw JSON string output from the prompt itself.
+const ClaimDataJsonStringSchema = z.string().describe('A JSON string representing the auto-filled claim data.');
+
 const prompt = ai.definePrompt({
   name: 'extractAndFillClaimDataPrompt',
   input: {schema: ExtractAndFillClaimDataInputSchema},
-  output: {schema: ExtractAndFillClaimDataOutputSchema},
+  // The prompt will directly output a JSON string.
+  output: {schema: ClaimDataJsonStringSchema},
   prompt: `You are an AI assistant specialized in extracting information from claim documents and auto-filling claim forms.
 
   Instructions:
@@ -40,7 +46,7 @@ const prompt = ai.definePrompt({
   3. Compare the extracted information with the current claim data.
   4. Fill in any missing values in the current claim data with the extracted information.
   5. If there are conflicting values, use the information extracted from the claim document.
-  6. Return the auto-filled claim data in JSON format.
+  6. Return the auto-filled claim data as a JSON string.
 
   Claim Document:
   {{media url=claimDocumentDataUri}}
@@ -49,7 +55,7 @@ const prompt = ai.definePrompt({
   {{json currentClaimData}}
 
   Output:
-  Return the auto-filled claim data in JSON format.
+  Return the auto-filled claim data as a JSON string. Ensure the string is valid JSON.
   `,
 });
 
@@ -57,10 +63,23 @@ const extractAndFillClaimDataFlow = ai.defineFlow(
   {
     name: 'extractAndFillClaimDataFlow',
     inputSchema: ExtractAndFillClaimDataInputSchema,
+    // The flow's final output schema is the parsed object.
     outputSchema: ExtractAndFillClaimDataOutputSchema,
   },
-  async input => {
-    const {output} = await prompt(input);
-    return output!;
+  async (input): Promise<ExtractAndFillClaimDataOutput> => {
+    const {output: jsonStringOutput} = await prompt(input);
+
+    if (jsonStringOutput === undefined || jsonStringOutput === null) {
+        console.error('AI returned no output for claim data extraction.');
+        throw new Error('AI returned no output for claim data extraction.');
+    }
+
+    try {
+      const parsedData: ExtractAndFillClaimDataOutput = JSON.parse(jsonStringOutput);
+      return parsedData;
+    } catch (error) {
+      console.error('Failed to parse JSON output from AI for claim data:', error, 'Raw output:', jsonStringOutput);
+      throw new Error('AI returned malformed JSON for extracted data. Raw output: ' + jsonStringOutput);
+    }
   }
 );
