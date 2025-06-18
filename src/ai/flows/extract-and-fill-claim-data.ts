@@ -70,16 +70,17 @@ const extractAndFillClaimDataFlow = ai.defineFlow(
     const {output: jsonStringOutput} = await prompt(input);
 
     if (jsonStringOutput === undefined || jsonStringOutput === null) {
-        console.error('AI returned no output for claim data extraction.');
-        throw new Error('AI returned no output for claim data extraction.');
+        console.error('AI returned no output (null or undefined) for claim data extraction.');
+        throw new Error('AI returned no output for claim data extraction. Expected a JSON string.');
     }
 
     try {
       const parsedData: ExtractAndFillClaimDataOutput = JSON.parse(jsonStringOutput);
       return parsedData;
     } catch (error) {
-      console.error('Failed to parse JSON output from AI for claim data:', error, 'Raw output:', jsonStringOutput);
+      console.error('Failed to parse JSON output from AI for claim data:', error, 'Raw output was:', jsonStringOutput);
       throw new Error('AI returned malformed JSON for extracted data. Raw output: ' + jsonStringOutput);
     }
   }
 );
+
