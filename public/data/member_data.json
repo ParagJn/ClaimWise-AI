@@ -1,0 +1,19 @@
+
+{
+  "members": [
+    {
+      "aadhaarNumber": "123456789012",
+      "name": "John Doe",
+      "policyNumber": "POL98765",
+      "policyStatus": "Active",
+      "premiumPaidDate": "2023-09-01"
+    },
+    {
+      "aadhaarNumber": "987654321098",
+      "name": "Jane Smith",
+      "policyNumber": "POL54321",
+      "policyStatus": "Inactive",
+      "premiumPaidDate": "2022-08-15"
+    }
+  ]
+}

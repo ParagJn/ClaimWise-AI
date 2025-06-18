@@ -1,0 +1,12 @@
+
+{
+  "eligibleCodes": ["D01", "S23", "M50", "F12"],
+  "ineligibleCodes": ["X99", "Z00", "C01"],
+  "rules": [
+    "Claims for cosmetic procedures (codes starting with 'C') are not covered.",
+    "Pre-existing conditions identified by codes P01-P10 require a waiting period of 2 years.",
+    "Standard consultation (D01) is generally covered.",
+    "Emergency surgery (S23) is covered if policy is active.",
+    "Mental health services (M50) have specific coverage limits."
+  ]
+}
